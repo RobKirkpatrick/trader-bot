@@ -1,0 +1,18 @@
+# HTTP client
+requests==2.32.3
+
+# AWS SDK
+boto3==1.35.99
+botocore==1.35.99
+
+# Scheduling (local runs only — not needed in Lambda)
+APScheduler==3.10.4
+
+# Environment variables
+python-dotenv==1.0.1
+
+# Anthropic Claude API
+anthropic==0.40.0
+
+# RSA signing for Kalshi API auth (carpet_bagger)
+cryptography>=42.0.0

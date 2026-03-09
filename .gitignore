@@ -1,0 +1,33 @@
+# Secrets
+.env
+*.pem
+*.key
+secrets/
+
+# Build artifacts
+.build/
+*.zip
+deployment_package*/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Installers
+*.pkg
+*.dmg
+
+# CSV data
+*.csv
+
+# Claude internal
+.claude/
+
+# Logs
+*.log
