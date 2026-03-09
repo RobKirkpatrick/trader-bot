@@ -17,8 +17,9 @@ REGION="us-east-2"
 RUNTIME="python3.12"
 HANDLER="lambda_function.handler"
 DEPLOY_DIR="$(pwd)"
-BUILD_DIR="${DEPLOY_DIR}/.build"
-PACKAGE_ZIP="${DEPLOY_DIR}/deployment_package.zip"
+# Build in /tmp to avoid iCloud Drive sync interference
+BUILD_DIR="/tmp/trader-bot-build"
+PACKAGE_ZIP="/tmp/trader-bot.zip"
 # S3 bucket for deployment uploads (avoids Lambda 22MB direct-upload limit)
 DEPLOY_BUCKET="trading-bot-deploy-130854680873"
 
@@ -87,14 +88,14 @@ if aws lambda get-function \
         --output text 2>/dev/null | grep -q "${FUNCTION_NAME}"; then
 
     echo "    Uploading package to S3 (${DEPLOY_BUCKET})..."
-    aws s3 cp "${PACKAGE_ZIP}" "s3://${DEPLOY_BUCKET}/deployment_package.zip" \
+    aws s3 cp "${PACKAGE_ZIP}" "s3://${DEPLOY_BUCKET}/lambda.zip" \
         --region "${REGION}" > /dev/null
 
     echo "    Updating existing function code from S3..."
     aws lambda update-function-code \
         --function-name "${FUNCTION_NAME}" \
         --s3-bucket "${DEPLOY_BUCKET}" \
-        --s3-key "deployment_package.zip" \
+        --s3-key "lambda.zip" \
         --region "${REGION}" \
         --output json | python3 -c "
 import sys, json
