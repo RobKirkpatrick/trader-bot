@@ -231,8 +231,8 @@ print(json.dumps({
 _upsert_schedule "trading-bot-pre-market"  "0 8 ? * MON-FRI *"  "pre_market"  "TraderBot pre-market scan 08:00 ET"
 _upsert_schedule "trading-bot-market-open" "35 9 ? * MON-FRI *" "market_open" "TraderBot market-open scan 09:35 ET"
 _upsert_schedule "trading-bot-midday"      "0 12 ? * MON-FRI *" "midday"      "TraderBot midday scan 12:00 ET"
-_upsert_schedule "trading-bot-eod"         "45 15 ? * MON-FRI *" "end_of_day"  "TraderBot end-of-day review 15:45 ET"
-_upsert_schedule "trading-bot-evening"     "45 18 ? * MON-FRI *" "suggestions"    "TraderBot evening suggestions 18:45 ET"
+_upsert_schedule "trading-bot-eod"         "30 15 ? * MON-FRI *" "end_of_day"  "TraderBot end-of-day review 15:30 ET"
+_upsert_schedule "trading-bot-evening"     "0 19 ? * MON-FRI *"  "suggestions"    "TraderBot evening suggestions 19:00 ET (5pm MT)"
 _upsert_schedule "trading-bot-weekend"     "0 10 ? * SAT *"      "suggestions"    "TraderBot weekend suggestions 10:00 ET Saturday"
 _upsert_schedule "trading-bot-weekly"      "0 18 ? * SUN *"      "weekly_review"  "TraderBot weekly performance review 18:00 ET Sunday"
 

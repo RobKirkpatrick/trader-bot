@@ -1494,7 +1494,7 @@ def run_end_of_day_scan(
     2. Auto-closes any position down more than STOP_LOSS_PCT (7%).
     3. Sends a portfolio P&L summary email regardless of whether anything was closed.
     """
-    window = "End of Day (15:45 ET)"
+    window = "End of Day (15:30 ET)"
     logger.info("=== %s review starting ===", window)
 
     client = client or PublicClient()

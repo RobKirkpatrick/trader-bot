@@ -60,9 +60,9 @@ class Settings:
     MIDDAY_HOUR: int = 12
     MIDDAY_MINUTE: int = 0
     EOD_HOUR: int = 15
-    EOD_MINUTE: int = 45
-    EVENING_HOUR: int = 18       # 6:45 PM ET — off-hours suggestion scan
-    EVENING_MINUTE: int = 45
+    EOD_MINUTE: int = 30
+    EVENING_HOUR: int = 19       # 7:00 PM ET (5:00 PM MT) — off-hours suggestion scan
+    EVENING_MINUTE: int = 0
     WEEKEND_HOUR: int = 10       # 10:00 AM ET Saturday — weekend suggestion scan
     WEEKEND_MINUTE: int = 0
 

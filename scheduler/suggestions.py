@@ -1,14 +1,15 @@
 """
 Off-hours trade suggestion engine.
 
-Runs at 6:45 PM ET weekdays and 10:00 AM ET Saturdays.
+Runs at 7:00 PM ET weekdays (5:00 PM MT) and 10:00 AM ET Saturdays.
 
 Flow:
   1. Fetch macro headlines (NewsAPI — same source as regular scans)
-  2. Optionally fetch current/EOD prices (Public.com — may be unavailable on weekends)
-  3. Call Claude Haiku with headlines + prices → 3 specific buy ideas ($2–$5)
-  4. Generate HMAC-signed approval URLs (20-hour expiry)
-  5. Email the 3 suggestions with one-click approve links
+  2. Pull today's CloudWatch research log (signals, macro score, what traded)
+  3. Optionally fetch current/EOD prices (Public.com — may be unavailable on weekends)
+  4. Call Claude Sonnet with the full day's research → 3 specific buy ideas
+  5. Generate HMAC-signed approval URLs (20-hour expiry)
+  6. Email the research digest + 3 suggestions with one-click approve links
 
 Security:
   - Approval URLs are signed with HMAC-SHA256 using SUGGESTION_TOKEN_SECRET
@@ -66,26 +67,102 @@ SUGGESTION_UNIVERSE = [
     "ZM", "SHOP", "SQ", "COIN", "MSTR",
 ]
 
-_SUGGESTION_SYSTEM = """You are a trading assistant for a retail investor with a small brokerage account (~$1,000).
+_SUGGESTION_SYSTEM = """\
+You are a senior trading analyst reviewing a full day of automated market research for a retail investor (~$1,000 account).
 
-Generate exactly 3 specific, actionable buy suggestions for tonight or this weekend.
+Your job:
+1. Digest the day's research (macro sentiment, price signals, news, what the bot already traded)
+2. Identify the 3 best buy opportunities for tomorrow's open
+3. Avoid anything the bot already bought today (listed in the research)
 
 Rules:
 - Each suggestion must be between $2 and $5
-- Prefer divergence plays: stock is down on price but news/sentiment is positive (good entry)
-- Include thematic macro plays based on geopolitical or economic events (ETFs are great for this)
-- Only suggest liquid US stocks and ETFs — no penny stocks, no crypto ETFs
-- Be specific in the rationale: reference the actual news event or price action
+- Prefer divergence plays: strong fundamentals/news but price hasn't moved yet, or pullback after positive catalyst
+- Include thematic macro plays based on the day's geopolitical or economic events
+- Only suggest liquid US stocks and ETFs from the universe provided — no penny stocks, no crypto ETFs
+- Be specific: reference the actual signal, price action, or news item driving the idea
+- Avoid tickers the bot already bought today
 
-Available tickers to choose from:
+Available tickers:
 {universe}
 
-Respond ONLY with a valid JSON array — no markdown, no preamble:
+Respond ONLY with valid JSON — no markdown, no preamble:
 [
-  {{"ticker": "AAPL", "rationale": "Apple fell 2.1% today despite strong product event reception. The dip looks like an overreaction.", "dollars": 3.0}},
-  {{"ticker": "ITA",  "rationale": "Geopolitical tensions rising in the Middle East — defense ETFs historically outperform in these environments.", "dollars": 5.0}},
-  {{"ticker": "NVDA", "rationale": "AI chip demand remains robust per recent analyst reports; modest pullback is a good entry point.", "dollars": 2.0}}
+  {{"ticker": "AAPL", "rationale": "Fell 2.1% today despite strong product event. Oversold on high WSB volume — good entry.", "dollars": 3.0}},
+  {{"ticker": "ITA",  "rationale": "Macro: escalating Iran conflict. Defense ETFs historically outperform. Scanner scored macro -0.62 (bearish) which makes defense a natural hedge.", "dollars": 5.0}},
+  {{"ticker": "NVDA", "rationale": "Price signal +0.64, WSB rank 4 with 7x mention surge. Already trading well above threshold — adding here before tomorrow's open.", "dollars": 2.0}}
 ]"""
+
+
+def _fetch_todays_research() -> str:
+    """
+    Pull today's Lambda CloudWatch logs and extract the trading research digest:
+    macro score, top signals, what was traded, stop-losses triggered.
+
+    Returns a plain-text summary string for Claude's context.
+    Falls back to empty string gracefully.
+    """
+    import os
+    from datetime import date
+
+    log_group = os.environ.get(
+        "AWS_LAMBDA_LOG_GROUP_NAME", "/aws/lambda/trading-bot-sentiment"
+    )
+    today_prefix = date.today().strftime("%Y/%m/%d")
+
+    keywords = [
+        "Macro score", "Claude macro sentiment", "Key events",
+        "→", "bullish", "bearish", "neutral",
+        "Order placed", "BUY", "SELL", "orders_placed", "signals_found",
+        "stop-loss", "Stop loss", "STOP",
+        "Account —", "Buying power",
+        "Scan complete",
+    ]
+
+    try:
+        logs_client = boto3.client("logs", region_name=settings.AWS_REGION)
+        streams = logs_client.describe_log_streams(
+            logGroupName=log_group,
+            logStreamNamePrefix=today_prefix,
+            orderBy="LastEventTime",
+            descending=True,
+            limit=6,
+        ).get("logStreams", [])
+    except Exception as exc:
+        logger.debug("CloudWatch research fetch skipped: %s", exc)
+        return ""
+
+    lines: list[str] = []
+    for stream in streams:
+        try:
+            events = logs_client.get_log_events(
+                logGroupName=log_group,
+                logStreamName=stream["logStreamName"],
+                startFromHead=True,
+                limit=300,
+            ).get("events", [])
+            for ev in events:
+                msg = ev.get("message", "")
+                if any(kw.lower() in msg.lower() for kw in keywords):
+                    # Strip timestamp/request-id prefix, keep the content
+                    clean = msg.split("\t")[-1].strip()
+                    if clean and len(clean) < 400:
+                        lines.append(clean)
+        except Exception:
+            continue
+
+    if not lines:
+        return ""
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique = []
+    for ln in lines:
+        if ln not in seen:
+            seen.add(ln)
+            unique.append(ln)
+
+    return "\n".join(unique[:120])  # cap at 120 lines
 
 
 def _make_approval_token(ticker: str, dollars: float, expires_ts: int, secret: str) -> str:
@@ -120,27 +197,31 @@ def _make_approve_all_url(suggestions: list[dict], function_url: str, secret: st
 
 def generate_suggestions(
     headlines: list[str],
+    research_log: str = "",
     prices: dict[str, float] | None = None,
 ) -> list[dict]:
     """
-    Call Claude Haiku to generate 3 trade suggestions.
+    Call Claude Sonnet to generate 3 trade suggestions informed by today's research.
 
     Args:
-        headlines: List of macro news headlines from NewsAPI
-        prices:    Optional dict of {ticker: current_price} for context
+        headlines:    Macro news headlines from NewsAPI
+        research_log: Today's CloudWatch log digest (signals, macro, trades)
+        prices:       Optional dict of {ticker: current_price}
 
     Returns:
         List of dicts: [{"ticker": str, "rationale": str, "dollars": float}]
-        Returns [] on failure (caller handles gracefully).
     """
     universe_str = ", ".join(SUGGESTION_UNIVERSE)
     system = _SUGGESTION_SYSTEM.format(universe=universe_str)
 
-    # Build user content
     parts = []
+
+    if research_log:
+        parts.append(f"TODAY'S TRADING RESEARCH LOG:\n{research_log}")
+
     if headlines:
         headlines_text = "\n".join(f"- {h}" for h in headlines[:50])
-        parts.append(f"Current news headlines:\n{headlines_text}")
+        parts.append(f"CURRENT NEWS HEADLINES:\n{headlines_text}")
     else:
         parts.append(
             "No live headlines available. Use your knowledge of recent macro events "
@@ -149,18 +230,18 @@ def generate_suggestions(
 
     if prices:
         price_lines = "\n".join(f"  {sym}: ${p:.2f}" for sym, p in sorted(prices.items()))
-        parts.append(f"\nCurrent/recent prices:\n{price_lines}")
+        parts.append(f"CURRENT/RECENT PRICES:\n{price_lines}")
 
     now_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
-    parts.append(f"\nToday's date: {now_str}")
+    parts.append(f"Today's date: {now_str}")
 
-    user_content = "\n".join(parts)
+    user_content = "\n\n".join(parts)
 
     try:
         client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=600,
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
             system=system,
             messages=[{"role": "user", "content": user_content}],
         )
@@ -175,17 +256,16 @@ def generate_suggestions(
 
         suggestions = json.loads(raw)
 
-        # Validate and clamp dollars
         result = []
         for s in suggestions[:3]:
-            ticker  = str(s.get("ticker", "")).upper().strip()
-            dollars = float(s.get("dollars", settings.SUGGESTION_DOLLARS_DEFAULT))
-            dollars = round(max(2.0, min(5.0, dollars)), 2)
+            ticker    = str(s.get("ticker", "")).upper().strip()
+            dollars   = float(s.get("dollars", settings.SUGGESTION_DOLLARS_DEFAULT))
+            dollars   = round(max(2.0, min(5.0, dollars)), 2)
             rationale = str(s.get("rationale", "")).strip()
             if ticker and rationale:
                 result.append({"ticker": ticker, "rationale": rationale, "dollars": dollars})
 
-        logger.info("Claude generated %d suggestions: %s", len(result), [s["ticker"] for s in result])
+        logger.info("Claude Sonnet generated %d suggestions: %s", len(result), [s["ticker"] for s in result])
         return result
 
     except json.JSONDecodeError as exc:
@@ -200,21 +280,39 @@ def _build_suggestion_email(
     suggestions: list[dict],
     function_url: str,
     secret: str,
+    research_log: str = "",
 ) -> str:
     now_str = datetime.now(timezone.utc).strftime("%a %b %d, %Y  %I:%M %p UTC")
     lines = [
-        "TraderBot — Evening Suggestions",
+        "TraderBot — Evening Research Digest",
         now_str,
         "─" * 42,
-        "Market is closed. Here are tonight's 3 trade ideas:",
+    ]
+
+    # Research digest section
+    if research_log:
+        lines += [
+            "TODAY'S RESEARCH SUMMARY",
+            "─" * 42,
+            research_log[:2000],  # cap for email readability
+            "",
+        ]
+
+    lines += [
+        "─" * 42,
+        "TOMORROW'S 3 TRADE IDEAS (Claude Sonnet)",
         "",
     ]
 
     for i, s in enumerate(suggestions, 1):
-        ticker   = s["ticker"]
-        dollars  = s["dollars"]
+        ticker    = s["ticker"]
+        dollars   = s["dollars"]
         rationale = s["rationale"]
-        url = _make_approval_url(ticker, dollars, function_url, secret) if function_url and secret else "(approval URL unavailable)"
+        url = (
+            _make_approval_url(ticker, dollars, function_url, secret)
+            if function_url and secret
+            else "(approval URL unavailable)"
+        )
 
         lines += [
             "━" * 42,
@@ -263,11 +361,18 @@ def run_suggestions_scan() -> dict:
         logger.warning("Headlines fetch failed: %s", exc)
         headlines = []
 
-    # 2. Optionally fetch current prices (graceful — fails on weekends/after hours)
+    # 2. Pull today's research from CloudWatch
+    research_log = ""
+    try:
+        research_log = _fetch_todays_research()
+        logger.info("Research log: %d chars", len(research_log))
+    except Exception as exc:
+        logger.warning("Research log fetch failed: %s", exc)
+
+    # 3. Optionally fetch current prices (graceful — fails on weekends/after hours)
     prices: dict[str, float] = {}
     try:
         from broker.public_client import PublicClient
-        from sentiment.market_data import fetch_price_signals
         client = PublicClient()
         quotes = client.get_quotes(SUGGESTION_UNIVERSE[:30])  # limit to avoid quota
         for q in quotes.get("quotes", []):
@@ -282,14 +387,14 @@ def run_suggestions_scan() -> dict:
     except Exception as exc:
         logger.info("Price fetch skipped (off-hours): %s", exc)
 
-    # 3. Generate suggestions via Claude
-    suggestions = generate_suggestions(headlines, prices or None)
+    # 4. Generate suggestions via Claude Sonnet
+    suggestions = generate_suggestions(headlines, research_log=research_log, prices=prices or None)
 
     if not suggestions:
         logger.warning("No suggestions generated — skipping email")
         return {"window": "suggestions", "suggestions": 0}
 
-    # 4. Build and send email
+    # 5. Build and send email
     function_url = settings.LAMBDA_FUNCTION_URL
     secret       = settings.SUGGESTION_TOKEN_SECRET
 
@@ -298,8 +403,8 @@ def run_suggestions_scan() -> dict:
     if not secret:
         logger.warning("SUGGESTION_TOKEN_SECRET not set — approval links will be unsigned")
 
-    message = _build_suggestion_email(suggestions, function_url, secret)
-    subject = f"[TraderBot] Tonight's 3 trade ideas — {datetime.now(timezone.utc).strftime('%b %d')}"
+    message = _build_suggestion_email(suggestions, function_url, secret, research_log=research_log)
+    subject = f"[TraderBot] Evening digest + 3 picks — {datetime.now(timezone.utc).strftime('%b %d')}"
     logger.info(message)
 
     try:
@@ -311,4 +416,5 @@ def run_suggestions_scan() -> dict:
         "window": "suggestions",
         "suggestions": len(suggestions),
         "tickers": [s["ticker"] for s in suggestions],
+        "research_chars": len(research_log),
     }
