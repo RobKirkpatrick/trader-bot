@@ -10,7 +10,8 @@ Also provides summary() for the 11:59pm ET nightly digest.
 
 import logging
 import os
-from datetime import datetime, timezone
+import re as _re
+from datetime import datetime, timezone, date as _date
 
 import boto3
 
@@ -22,6 +23,31 @@ from carpet_bagger.strategy import (
 )
 
 logger = logging.getLogger(__name__)
+
+_MONTH_MAP = {m: i for i, m in enumerate(
+    ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"], 1
+)}
+
+def _game_date_from_ticker(ticker: str) -> _date | None:
+    """
+    Extract the game date embedded in a Kalshi ticker.
+
+    Kalshi encodes date as YYMONDD, e.g.:
+      KXNBAGAME-26MAR12PHXIND-PHX    → 2026-03-12
+      KXNCAABBGAME-26MAR101900TROY-… → 2026-03-10
+
+    Returns None if no date can be parsed.
+    """
+    m = _re.search(r'(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})', ticker.upper())
+    if not m:
+        return None
+    try:
+        year  = 2000 + int(m.group(1))
+        month = _MONTH_MAP[m.group(2)]
+        day   = int(m.group(3))
+        return _date(year, month, day)
+    except (ValueError, KeyError):
+        return None
 
 _TABLE  = "carpet-bagger-watchlist"
 _REGION = "us-east-2"
@@ -121,7 +147,18 @@ def _process_watching(
             return 0.0
         yes_ask = market.get("yes_ask", 0) / 100.0
 
-        # Only buy once the game has actually started
+        # Gate 1: game date must be today (parsed from ticker) — prevents buying
+        # next-day markets where Kalshi's open_time reflects market creation, not tip-off.
+        from zoneinfo import ZoneInfo
+        today_et = datetime.now(ZoneInfo("America/New_York")).date()
+        game_date = _game_date_from_ticker(record.market_ticker)
+        if game_date is not None and game_date > today_et:
+            logger.debug("Game %s is on %s — not today (%s), holding", record.market_ticker, game_date, today_et)
+            record.current_prob = yes_ask
+            _update_record(record)
+            return 0.0
+
+        # Gate 2: Kalshi open_time must be in the past (game has actually tipped off)
         open_time_str = market.get("open_time", "")
         if open_time_str:
             try:
@@ -230,8 +267,8 @@ def _process_bought(record: WatchlistRecord, client: KalshiClient) -> None:
             _sell_position(record, client, yes_ask, reason="trailing_stop")
             return
 
-    # Stop loss: exit if odds drop below entry price (break-even protection)
-    if record.entry_price > 0 and yes_ask < record.entry_price:
+    # Stop loss: exit if odds drop below 35% floor (regardless of entry price)
+    if record.entry_price > 0 and yes_ask < STOP_LOSS:
         _sell_position(record, client, yes_ask, reason="stop_loss")
         return
 
@@ -290,16 +327,33 @@ def _reconcile_positions(client: KalshiClient) -> None:
             logger.warning("Reconcile: %s has %d contracts on Kalshi but no DDB record — skipping", ticker, contracts)
             continue
         record = WatchlistRecord.from_dynamodb(item)
-        if record.status == "bought" and record.contract_count == contracts:
-            continue  # already in sync
-        if record.status in ("closed", "watching") or record.contract_count != contracts:
+
+        # Never restore a closed position — this causes a sell loop (take_profit fires,
+        # marks closed, reconcile re-opens, take_profit fires again every 5 min).
+        if record.status == "closed":
+            logger.debug("Reconcile: %s is closed in DDB but Kalshi still shows %d contracts — ignoring (sell order may be pending)", ticker, contracts)
+            continue
+
+        # Trust DynamoDB contract_count for active bought positions — the Kalshi
+        # position API can return unexpected values that corrupt our cost basis.
+        if record.status == "bought":
+            if record.contract_count == contracts:
+                continue  # in sync
+            else:
+                logger.warning(
+                    "Reconcile: %s DDB has %d contracts, Kalshi reports %d — trusting DynamoDB count",
+                    ticker, record.contract_count, contracts,
+                )
+                continue
+
+        # Only reconcile watching positions where a buy went through but DDB write failed
+        if record.status == "watching":
             logger.info(
-                "Reconcile: fixing %s — DDB status=%s contracts=%d → bought contracts=%d",
-                ticker, record.status, record.contract_count, contracts,
+                "Reconcile: %s has %d contracts on Kalshi but DDB shows watching — restoring to bought",
+                ticker, contracts,
             )
             record.status         = "bought"
             record.contract_count = contracts
-            # Preserve entry_price if already set; otherwise approximate from current ask
             if record.entry_price == 0.0:
                 try:
                     mkt = client.get_market(ticker)

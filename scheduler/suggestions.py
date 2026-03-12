@@ -245,7 +245,12 @@ def generate_suggestions(
             system=system,
             messages=[{"role": "user", "content": user_content}],
         )
-        raw = message.content[0].text.strip()
+        raw = message.content[0].text.strip() if message.content else ""
+        logger.info("Claude raw response (%d chars): %s", len(raw), raw[:300])
+
+        if not raw:
+            logger.error("Claude suggestions returned empty response (stop_reason=%s)", message.stop_reason)
+            return []
 
         # Strip markdown fences if present
         if raw.startswith("```"):
@@ -253,6 +258,16 @@ def generate_suggestions(
             if raw.startswith("json"):
                 raw = raw[4:]
             raw = raw.strip()
+
+        # Extract JSON array even if Claude added preamble text
+        if not raw.startswith("["):
+            start = raw.find("[")
+            end   = raw.rfind("]")
+            if start != -1 and end != -1 and end > start:
+                raw = raw[start:end + 1]
+            else:
+                logger.error("No JSON array found in Claude response")
+                return []
 
         suggestions = json.loads(raw)
 
@@ -269,7 +284,7 @@ def generate_suggestions(
         return result
 
     except json.JSONDecodeError as exc:
-        logger.error("Claude suggestions returned non-JSON: %s", exc)
+        logger.error("Claude suggestions returned non-JSON (raw=%r): %s", raw[:300] if 'raw' in vars() else "N/A", exc)
         return []
     except Exception as exc:
         logger.error("Claude suggestions failed: %s", exc)

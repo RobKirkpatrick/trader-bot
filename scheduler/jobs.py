@@ -41,6 +41,13 @@ _OPTIONS_DTE_MIN      = 14   # at least 2 weeks out
 _OPTIONS_DTE_MAX      = 45   # no more than ~6 weeks
 _PUT_SPREAD_WIDTH_PCT = 0.02  # bear put spread width (e.g. $580/$568 on SPY)
 
+# Profit-taking thresholds for open options positions
+_OPTIONS_PROFIT_TAKE_PCT       = 1.00  # auto-close if up ≥ 100% (double your money)
+_OPTIONS_PROFIT_TAKE_MIN_GAIN  = 0.20  # AND absolute gain must be ≥ $0.20/share ($20/contract)
+                                        # prevents exiting sub-10-cent options on trivial moves
+_OPTIONS_PROFIT_TAKE_DTE = 14           # auto-close if ≤ 14 DTE remaining (avoid expiry risk)
+_OPTIONS_STOP_LOSS_PCT   = 0.50         # options stop-loss: 50% loss (equities use settings.STOP_LOSS_PCT=7%)
+
 # Bear put spreads restricted to liquid index ETFs — individual stocks have wide
 # bid-ask spreads that destroy value and illiquid legs that are hard to close.
 _INDEX_ETF_TICKERS = {"SPY", "QQQ", "IWM"}
@@ -217,8 +224,26 @@ def _evaluate_intraday_rotation(
             logger.info("PDT guard: skipping intraday sell of %s — opened today", base)
             continue
 
-        # 1. Signal reversal: long but signal has gone bearish
+        # 1. Signal reversal: long but signal has gone bearish.
+        # For options, suppress the exit if the position is flat or profitable — macro noise
+        # frequently flips sentiment negative intraday even when the original catalyst thesis
+        # is intact. Only exit options on reversal if already down ≥ 25% (thesis + price agree).
         if score <= settings.SENTIMENT_SELL_THRESHOLD:
+            if re.search(r'\d', sym):  # options symbol
+                current_price = price_map.get(sym, 0.0)
+                cost_basis    = p.get("costBasis")
+                avg_opt = (
+                    _safe_float(cost_basis.get("unitCost")) if isinstance(cost_basis, dict)
+                    else _safe_float(cost_basis)
+                ) or _safe_float(p.get("averagePrice")) or _safe_float(p.get("avgCostPerShare"))
+                if avg_opt and avg_opt > 0 and current_price > 0:
+                    loss_pct = (avg_opt - current_price) / avg_opt
+                    if loss_pct < 0.25:
+                        logger.info(
+                            "Signal reversal suppressed for option %s — loss=%.1f%% < 25%% floor (score=%+.3f)",
+                            sym, loss_pct * 100, score,
+                        )
+                        continue
             to_close.append({"position": p, "reason": f"Signal reversal: {base} score={score:+.3f}"})
             continue
 
@@ -238,6 +263,131 @@ def _evaluate_intraday_rotation(
                         f"freeing capital for {', '.join(sorted(strong_new))}"
                     ),
                 })
+
+    return to_close
+
+
+def _parse_osi_symbol(osi: str) -> dict | None:
+    """
+    Parse an OCC/OSI option symbol into components.
+    Format: {UNDERLYING}{YYMMDD}{C|P}{STRIKE_8DIGITS}
+    e.g. RIVN260410C00015500 → {underlying: RIVN, expiry: 2026-04-10, type: CALL, strike: 15.50}
+    Returns None if the symbol doesn't match OSI format.
+    """
+    import re as _re
+    from datetime import date as _date
+    m = _re.match(r'^([A-Z]+)(\d{6})([CP])(\d{8})$', osi)
+    if not m:
+        return None
+    underlying, date_str, cp, strike_raw = m.groups()
+    try:
+        expiry = datetime.strptime(date_str, "%y%m%d").date()
+    except ValueError:
+        return None
+    return {
+        "underlying": underlying,
+        "expiry":     expiry,
+        "type":       "CALL" if cp == "C" else "PUT",
+        "strike":     int(strike_raw) / 1000.0,
+    }
+
+
+def _evaluate_options_profit_taking(
+    positions: list[dict],
+    client,
+    today_buys: set,
+) -> list[dict]:
+    """
+    Identify options positions to close for profit-taking or time-based exit:
+      1. Up ≥ OPTIONS_PROFIT_TAKE_PCT (50%) — lock in gains
+      2. ≤ OPTIONS_PROFIT_TAKE_DTE (14) DTE remaining — exit before theta accelerates
+
+    Returns a list of dicts: {position, reason, current_price, avg_price, pnl_pct}
+    Skips short legs (qty ≤ 0) and positions bought today (PDT guard).
+    """
+    import re as _re
+    from datetime import date as _date
+
+    to_close = []
+    today = datetime.now(timezone.utc).date()
+
+    for p in positions:
+        sym = (p.get("instrument", {}).get("symbol") or p.get("symbol") or "").upper()
+        if not sym:
+            continue
+
+        # Only process options (OSI symbols contain digits)
+        if not _re.search(r'\d', sym):
+            continue
+
+        qty = _safe_float(p.get("quantity") or p.get("shares"))
+        if qty is None or qty <= 0:
+            continue  # skip short legs (e.g. short side of a spread)
+
+        info = _parse_osi_symbol(sym)
+        if not info:
+            continue
+
+        base = info["underlying"]
+
+        # PDT guard
+        if base in today_buys:
+            logger.info("PDT guard: skipping profit-take on %s — opened today", sym)
+            continue
+
+        dte = (info["expiry"] - today).days
+
+        # Cost basis (price per share, so multiply by 100 for per-contract dollar value)
+        cost_basis = p.get("costBasis")
+        avg_price = (
+            _safe_float(cost_basis.get("unitCost")) if isinstance(cost_basis, dict)
+            else _safe_float(cost_basis)
+        ) or _safe_float(p.get("averagePrice")) or _safe_float(p.get("avgCostPerShare"))
+
+        # Time-based exit: ≤ 14 DTE — close regardless of P&L to avoid expiry wipeout
+        if 0 < dte <= _OPTIONS_PROFIT_TAKE_DTE:
+            to_close.append({
+                "position":      p,
+                "reason":        f"Time exit: {dte} DTE ≤ {_OPTIONS_PROFIT_TAKE_DTE} — closing before expiry",
+                "current_price": 0.0,
+                "avg_price":     avg_price or 0.0,
+                "pnl_pct":       None,
+            })
+            continue
+
+        # Profit-based exit: fetch current mid price from options chain
+        if avg_price and avg_price > 0:
+            try:
+                chain = client.get_option_chain(
+                    symbol=info["underlying"],
+                    expiration=info["expiry"].strftime("%Y-%m-%d"),
+                    option_type=info["type"],
+                )
+                current_price = 0.0
+                for c in chain:
+                    if c.get("optionSymbol", "").upper() == sym:
+                        bid = float(c.get("bid") or 0)
+                        ask = float(c.get("ask") or 0)
+                        current_price = (bid + ask) / 2
+                        break
+                if current_price > 0:
+                    pnl_pct        = (current_price - avg_price) / avg_price
+                    dollar_gain    = current_price - avg_price
+                    pct_met        = pnl_pct >= _OPTIONS_PROFIT_TAKE_PCT
+                    dollar_met     = dollar_gain >= _OPTIONS_PROFIT_TAKE_MIN_GAIN
+                    if pct_met and dollar_met:
+                        to_close.append({
+                            "position":      p,
+                            "reason":        (
+                                f"Profit-take: up {pnl_pct:+.1%} / +${dollar_gain:.2f}/share "
+                                f"(avg=${avg_price:.2f} → mid=${current_price:.4f}/share)"
+                            ),
+                            "current_price": current_price,
+                            "avg_price":     avg_price,
+                            "pnl_pct":       pnl_pct,
+                        })
+            except Exception as exc:
+                logger.warning("Options profit-take price check failed for %s: %s", sym, exc)
 
     return to_close
 
@@ -1488,11 +1638,12 @@ def run_end_of_day_scan(
     risk_manager: RiskManager | None = None,
 ) -> dict:
     """
-    End-of-day review at 15:45 ET (15 min before market close).
+    End-of-day review at 15:30 ET (30 min before market close).
 
     1. Fetches all open positions and current prices.
-    2. Auto-closes any position down more than STOP_LOSS_PCT (7%).
-    3. Sends a portfolio P&L summary email regardless of whether anything was closed.
+    2. Auto-closes options positions up ≥ 50% or with ≤ 14 DTE remaining (profit-taking).
+    3. Auto-closes any position down more than STOP_LOSS_PCT (7%).
+    4. Sends a portfolio P&L summary email regardless of whether anything was closed.
     """
     window = "End of Day (15:30 ET)"
     logger.info("=== %s review starting ===", window)
@@ -1549,11 +1700,55 @@ def run_end_of_day_scan(
     # PDT guard: don't stop-loss close positions opened today (would create a day-trade round trip)
     today_buys = _get_today_buy_symbols(portfolio_value) or set()   # empty set = no buys logged = safe to close all
 
-    # Evaluate each position; auto-close if stop-loss hit
+    # Options profit-taking: close positions up ≥ 50% or ≤ 14 DTE remaining
+    profit_takes = _evaluate_options_profit_taking(positions, client, today_buys)
+    profit_take_syms: set[str] = set()
     position_reviews: list[dict] = []
+    for pt in profit_takes:
+        pt_sym = (pt["position"].get("instrument", {}).get("symbol") or pt["position"].get("symbol") or "").upper()
+        pt_qty = _safe_float(pt["position"].get("quantity") or pt["position"].get("shares"))
+        pt_review: dict = {
+            "symbol":        pt_sym,
+            "qty":           pt_qty,
+            "current_price": pt["current_price"],
+            "avg_price":     pt["avg_price"],
+            "pnl_pct":       pt["pnl_pct"],
+            "pnl_usd":       (
+                (pt["current_price"] - pt["avg_price"]) * (pt_qty or 0) * 100
+                if pt["current_price"] and pt["avg_price"] and pt_qty else None
+            ),
+            "action":        "hold",
+            "close_reason":  pt["reason"],
+            "order_id":      None,
+        }
+        if pt_qty and pt_qty > 0:
+            try:
+                order = client.place_options_order(
+                    option_symbol=pt_sym, side="SELL",
+                    quantity=str(int(pt_qty)), order_type="MARKET",
+                )
+                pt_review["action"]   = "closed"
+                pt_review["order_id"] = order.get("orderId", "")
+                logger.info(
+                    "EOD profit-take: SELL %s ×%d | orderId=%s | reason=%s",
+                    pt_sym, int(pt_qty), pt_review["order_id"], pt["reason"],
+                )
+            except Exception as exc:
+                pt_review["action"]       = "close_failed"
+                pt_review["close_reason"] += f" — close failed: {exc}"
+                logger.error("EOD profit-take close failed for %s: %s", pt_sym, exc)
+        position_reviews.append(pt_review)
+        profit_take_syms.add(pt_sym)
+
+    # Evaluate each remaining position; auto-close if stop-loss hit
+    import re as _re
     for p in positions:
         sym = (p.get("instrument", {}).get("symbol") or p.get("symbol") or "").upper()
         if not sym:
+            continue
+
+        # Skip positions already handled by profit-taking above
+        if sym in profit_take_syms:
             continue
 
         qty           = _safe_float(p.get("quantity") or p.get("shares"))
@@ -1587,8 +1782,6 @@ def run_end_of_day_scan(
             "order_id":      None,
         }
 
-        # Auto-close if down more than the stop-loss threshold
-        import re as _re
         _m = _re.match(r'^([A-Z]+)', sym)
         _base = _m.group(1) if _m else sym
         if _base in today_buys:
@@ -1597,16 +1790,24 @@ def run_end_of_day_scan(
             logger.info("PDT guard: skipping stop-loss on %s — bought today", sym)
             continue
 
-        if pnl_pct is not None and pnl_pct <= -settings.STOP_LOSS_PCT:
+        is_options = bool(_re.search(r'\d', sym))
+        stop_loss_threshold = _OPTIONS_STOP_LOSS_PCT if is_options else settings.STOP_LOSS_PCT
+        if pnl_pct is not None and pnl_pct <= -stop_loss_threshold:
             review["close_reason"] = (
-                f"Stop-loss hit ({pnl_pct:+.1%} ≤ -{settings.STOP_LOSS_PCT:.0%})"
+                f"Stop-loss hit ({pnl_pct:+.1%} ≤ -{stop_loss_threshold:.0%})"
             )
             if qty > 0:
                 try:
-                    order    = client.place_order(
-                        symbol=sym, side="SELL", order_type="MARKET",
-                        quantity=str(qty),
-                    )
+                    if is_options:
+                        order = client.place_options_order(
+                            option_symbol=sym, side="SELL",
+                            quantity=str(int(qty)), order_type="MARKET",
+                        )
+                    else:
+                        order = client.place_order(
+                            symbol=sym, side="SELL", order_type="MARKET",
+                            quantity=str(qty),
+                        )
                     order_id = order.get("orderId", "")
                     review["action"]   = "closed"
                     review["order_id"] = order_id
@@ -1623,18 +1824,23 @@ def run_end_of_day_scan(
 
         position_reviews.append(review)
 
-    n_closed = sum(1 for r in position_reviews if r["action"] == "closed")
+    n_closed       = sum(1 for r in position_reviews if r["action"] == "closed")
+    n_profit_takes = sum(1 for r in position_reviews if r["action"] == "closed" and r["symbol"] in profit_take_syms)
+    n_stop_losses  = n_closed - n_profit_takes
 
     # Pull today's logs and generate a Claude narrative recap
     log_text  = _fetch_todays_log_events()
     narrative = _generate_eod_narrative(position_reviews, buying_power, log_text)
 
     msg = _build_eod_message(window, position_reviews, buying_power, narrative)
-    subject = (
-        f"[TraderBot] {n_closed} position(s) closed (stop-loss) — {window}"
-        if n_closed else
-        f"[TraderBot] {window} — {len(position_reviews)} position(s) open"
-    )
+    if n_profit_takes and n_stop_losses:
+        subject = f"[TraderBot] {n_profit_takes} profit-take + {n_stop_losses} stop-loss — {window}"
+    elif n_profit_takes:
+        subject = f"[TraderBot] {n_profit_takes} option(s) profit-taken — {window}"
+    elif n_stop_losses:
+        subject = f"[TraderBot] {n_stop_losses} position(s) closed (stop-loss) — {window}"
+    else:
+        subject = f"[TraderBot] {window} — {len(position_reviews)} position(s) open"
     _publish_sns(msg, subject=subject)
 
     return {"window": window, "positions": len(position_reviews), "closed": n_closed}
@@ -1718,6 +1924,21 @@ def _run_scan(
             cr = _close_intraday(rc["position"], client, rc["reason"])
             trade_results.append(cr)
         if any(r["action"] == "closed" for r in trade_results):
+            try:
+                positions = client.get_positions()
+                account_balance, _ = client.get_account_and_positions()
+                buying_power = account_balance.get("cash_balance", buying_power)
+            except Exception:
+                pass
+
+    # Options profit-taking: close positions up ≥ 50% or ≤ 14 DTE
+    if market_open and positions:
+        pt_today_buys = _get_today_buy_symbols(account_balance.get("portfolio_value", 0.0)) or set()
+        profit_takes = _evaluate_options_profit_taking(positions, client, pt_today_buys)
+        for pt in profit_takes:
+            cr = _close_intraday(pt["position"], client, pt["reason"])
+            trade_results.append(cr)
+        if profit_takes and any(r["action"] == "closed" for r in trade_results):
             try:
                 positions = client.get_positions()
                 account_balance, _ = client.get_account_and_positions()

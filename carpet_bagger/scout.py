@@ -16,8 +16,9 @@ import boto3
 
 from carpet_bagger.kalshi_client import KalshiClient
 from carpet_bagger.models import WatchlistRecord
+from carpet_bagger.monitor import _game_date_from_ticker
 from carpet_bagger.strategy import (
-    SPORT_SERIES, PRE_GAME_MIN, PRE_GAME_MAX, MIN_MINS_TO_GAME, MAX_CLOSE_HOURS,
+    SPORT_SERIES, PRE_GAME_MIN, PRE_GAME_MAX, MIN_MINS_TO_GAME, MAX_GAME_AGE_MINS, MAX_CLOSE_HOURS,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,7 +160,18 @@ def run(cfg: dict | None = None) -> dict:
             close_time_str = market.get("close_time") or ""
             open_time_str  = market.get("open_time")  or ""
 
-            # Game start filter — same calendar day in ET only, not starting in < 30 min
+            # Game date filter — use date embedded in ticker as the authoritative source.
+            # Kalshi's open_time reflects market creation (often the day before), not tip-off.
+            ticker_date = _game_date_from_ticker(ticker)
+            if ticker_date is not None:
+                if ticker_date > today_et:
+                    logger.debug("Skipping %s — game date %s is tomorrow or later", ticker, ticker_date)
+                    continue
+                if ticker_date < today_et:
+                    logger.debug("Skipping %s — game date %s was yesterday or earlier", ticker, ticker_date)
+                    continue
+
+            # open_time used only for same-day timing (too-soon / too-old guard)
             if open_time_str and open_time_str != close_time_str:
                 try:
                     game_dt      = datetime.fromisoformat(open_time_str.replace("Z", "+00:00"))
@@ -168,8 +180,8 @@ def run(cfg: dict | None = None) -> dict:
                     if 0 < mins_to_game < MIN_MINS_TO_GAME:
                         logger.debug("Skipping %s — opens in %.0f min (too soon)", ticker, mins_to_game)
                         continue
-                    if game_dt_et.date() != today_et:
-                        logger.debug("Skipping %s — game on %s, not today (%s)", ticker, game_dt_et.date(), today_et)
+                    if mins_to_game < -MAX_GAME_AGE_MINS:
+                        logger.debug("Skipping %s — game started %.0f min ago (too late to enter)", ticker, -mins_to_game)
                         continue
                 except ValueError:
                     pass
