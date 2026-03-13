@@ -35,6 +35,7 @@ KALSHI_TRANSACTIONS = [
     ("2026-03-04", +50.00),   # added $50
     ("2026-03-06", -35.43),   # withdrew winnings
     ("2026-03-07", -75.38),   # withdrew winnings
+    ("2026-03-11", +25.00),   # added $25
 ]
 # Net cash into Kalshi (deposits minus withdrawals) — used for P&L calculation
 # Negative = you've pulled out more than you put in (a good thing)
@@ -153,7 +154,9 @@ def fetch_public_state() -> dict:
         })
 
     # Total = cash on hand + current market value of all open positions
-    portfolio_value = cash_balance + position_value
+    portfolio_value  = cash_balance + position_value
+    unrealized_total = sum(p["unrealized_pnl"] for p in open_positions)
+    open_cost_total  = sum(p["cost_basis"]     for p in open_positions)
 
     # Try to fetch order history (status varies by broker — try common values)
     orders = []
@@ -167,11 +170,13 @@ def fetch_public_state() -> dict:
             continue
 
     return {
-        "cash_balance":    cash_balance,
-        "buying_power":    buying_power,
-        "portfolio_value": portfolio_value,
-        "open_positions":  open_positions,
-        "orders":          orders,
+        "cash_balance":     cash_balance,
+        "buying_power":     buying_power,
+        "portfolio_value":  portfolio_value,
+        "open_positions":   open_positions,
+        "open_cost_total":  open_cost_total,
+        "unrealized_total": unrealized_total,
+        "orders":           orders,
     }
 
 
@@ -224,20 +229,23 @@ def fetch_kalshi_state() -> dict:
         if not kalshi_key or not kalshi_pem:
             raise ValueError("KALSHI_API_KEY / KALSHI_RSA_PRIVATE_KEY not in environment")
         client = KalshiClient(api_key=kalshi_key, rsa_private_key_pem=kalshi_pem)
-        bal_data       = client._request("GET", "/portfolio/balance")
-        balance        = bal_data.get("balance", 0) / 100.0         # available cash
-        portfolio_val  = bal_data.get("portfolio_value", 0) / 100.0 # open position value
-        total_value    = balance + portfolio_val
-        positions  = client.get_positions()
-        open_pos = []
+        bal_data  = client._request("GET", "/portfolio/balance")
+        balance   = bal_data.get("balance", 0) / 100.0  # available cash in dollars
+        positions = client.get_positions()
+        open_pos  = []
+        open_exposure = 0.0
         for p in positions:
+            exp = abs(p.get("market_exposure", 0)) / 100.0
+            open_exposure += exp
             open_pos.append({
                 "ticker":    p.get("ticker", ""),
                 "contracts": abs(int(p.get("position", 0))),
-                "exposure":  abs(p.get("market_exposure", 0)) / 100.0,
+                "exposure":  exp,
             })
-        print(f"  Kalshi: cash=${balance:.2f}  positions=${portfolio_val:.2f}  total=${total_value:.2f}")
-        return {"balance": balance, "portfolio_value": portfolio_val, "total_value": total_value, "open_positions": open_pos}
+        # total = cash on hand + at-risk capital in open positions
+        total_value = balance + open_exposure
+        print(f"  Kalshi: cash=${balance:.2f}  open_exposure=${open_exposure:.2f}  total=${total_value:.2f}")
+        return {"balance": balance, "portfolio_value": open_exposure, "total_value": total_value, "open_positions": open_pos}
     except Exception as exc:
         print(f"  WARNING: Kalshi API unavailable: {exc}")
         return {"balance": 0.0, "portfolio_value": 0.0, "total_value": 0.0, "open_positions": []}
@@ -310,20 +318,20 @@ def write_csv(
 
     kalshi_unrealized = sum(p["exposure"] for p in kalshi["open_positions"])
 
-    # P&L = current value + withdrawn - deposited (captures value even after withdrawals)
-    public_gross_pnl = public_cur - PUBLIC_INITIAL_DEPOSIT
-    kalshi_gross_pnl = kalshi_cur + kalshi_total_withdrawn - kalshi_total_deposited
-    gross_pnl        = public_gross_pnl + kalshi_gross_pnl
+    # P&L split: realized (closed positions) vs unrealized (still open)
+    public_gross_pnl  = public_cur - PUBLIC_INITIAL_DEPOSIT
+    public_unrealized = public.get("unrealized_total", 0.0)
+    public_realized   = public_gross_pnl - public_unrealized
+    kalshi_gross_pnl  = kalshi_cur + kalshi_total_withdrawn - kalshi_total_deposited
+    realized_gross_pnl = public_realized + kalshi_gross_pnl
 
-    # "Total invested" = net cash still at risk (deposits - withdrawals)
-    total_net_in  = PUBLIC_INITIAL_DEPOSIT + KALSHI_NET_CASH_IN
     total_deposited = PUBLIC_INITIAL_DEPOSIT + kalshi_total_deposited
 
     aws_cost     = _prorated_cost(AWS_MONTHLY_COST,    days)
     claude_cost  = _prorated_cost(CLAUDE_MONTHLY_COST, days)
     other_cost   = _prorated_cost(OTHER_MONTHLY_COST,  days)
     total_cost   = aws_cost + claude_cost + other_cost
-    net_pnl      = gross_pnl - total_cost
+    net_pnl      = realized_gross_pnl - total_cost
     net_pct      = net_pnl / total_deposited * 100 if total_deposited else 0
 
     # HYSA benchmark on total deposited capital
@@ -342,21 +350,25 @@ def write_csv(
     blank()
     kv("Public.com current value", f"${public_cur:.2f}")
     kv("Kalshi current value", f"${kalshi_cur:.2f}")
-    kv("Total current value", f"${total_cur:.2f}")
+    kv("Total current value", f"${public_cur + kalshi_cur:.2f}")
     blank()
-    kv("Public.com gross P&L", f"${public_gross_pnl:+.2f}")
-    kv("Kalshi gross P&L (incl. withdrawals)", f"${kalshi_gross_pnl:+.2f}")
-    kv("  └─ Kalshi current balance", f"${kalshi['balance']:.2f}")
-    kv("  └─ Kalshi withdrawn (realized gains)", f"${kalshi_total_withdrawn:.2f}")
-    kv("  └─ Kalshi unrealized (open)", f"${kalshi_unrealized:.2f}")
-    kv("Total gross P&L", f"${gross_pnl:+.2f}")
+    kv("── Realized P&L (closed positions)", "")
+    kv("  Public realized", f"${public_realized:+.2f}")
+    kv("  Kalshi realized (incl. withdrawals)", f"${kalshi_gross_pnl:+.2f}")
+    kv("  └─ Kalshi cash balance", f"${kalshi['balance']:.2f}")
+    kv("  └─ Kalshi withdrawn", f"${kalshi_total_withdrawn:.2f}")
+    kv("  Total realized P&L", f"${realized_gross_pnl:+.2f}")
+    blank()
+    kv("── Unrealized P&L (open positions, still moving)", "")
+    kv("  Public unrealized", f"${public_unrealized:+.2f}  ({len(public['open_positions'])} positions)")
+    kv("  Kalshi unrealized", f"${kalshi_unrealized:+.2f}  ({len(kalshi['open_positions'])} positions)")
     blank()
     kv("AWS compute (prorated)", f"-${aws_cost:.2f}")
     kv("Claude subscription (prorated)", f"-${claude_cost:.2f}")
     kv("Other costs (prorated)", f"-${other_cost:.2f}")
     kv("Total costs", f"-${total_cost:.2f}")
     blank()
-    kv("NET P&L (after costs)", f"${net_pnl:+.2f}  ({net_pct:+.2f}%)")
+    kv("NET P&L on realized (after costs)", f"${net_pnl:+.2f}  ({net_pct:+.2f}%)")
     kv(f"HYSA benchmark ({settings.HYSA_APY:.1%} APY, {days}d)", f"${hysa_gain:.2f}")
     kv("Alpha vs HYSA", f"${alpha:+.2f}")
     blank()
@@ -462,45 +474,53 @@ def print_summary(public: dict, kalshi: dict, kalshi_trades: list[dict], public_
     kalshi_cur  = kalshi["total_value"]
     total_cur   = public_cur + kalshi_cur
 
-    public_gross_pnl = public_cur - PUBLIC_INITIAL_DEPOSIT
-    kalshi_gross_pnl = kalshi_cur + kalshi_total_withdrawn - kalshi_total_deposited
-    gross_pnl        = public_gross_pnl + kalshi_gross_pnl
+    public_gross_pnl   = public_cur - PUBLIC_INITIAL_DEPOSIT
+    public_unrealized  = public.get("unrealized_total", 0.0)
+    public_realized    = public_gross_pnl - public_unrealized
+    kalshi_gross_pnl   = kalshi_cur + kalshi_total_withdrawn - kalshi_total_deposited
+    gross_pnl          = public_gross_pnl + kalshi_gross_pnl
+    realized_gross_pnl = public_realized + kalshi_gross_pnl  # Kalshi all realized (settled contracts)
 
     total_cost  = sum([
         _prorated_cost(AWS_MONTHLY_COST, days),
         _prorated_cost(CLAUDE_MONTHLY_COST, days),
         _prorated_cost(OTHER_MONTHLY_COST, days),
     ])
-    net_pnl     = gross_pnl - total_cost
+    net_pnl     = realized_gross_pnl - total_cost
     net_pct     = net_pnl / total_deposited * 100 if total_deposited else 0
     hysa_gain   = total_deposited * ((1 + settings.HYSA_APY) ** (days / 365) - 1)
     alpha       = net_pnl - hysa_gain
     kalshi_wins   = sum(1 for t in kalshi_trades if t["pnl"] > 0)
     kalshi_losses = sum(1 for t in kalshi_trades if t["pnl"] < 0)
 
-    W = 46
+    W = 54
     print("=" * W)
     print("  TraderBot P&L Report — " + date.today().isoformat())
     print("=" * W)
-    print(f"  Days running:         {days}d  (since {TRACKING_START_DATE})")
+    print(f"  Days running:           {days}d  (since {TRACKING_START_DATE})")
     print(f"  Total capital deployed: ${total_deposited:.2f}")
     print()
-    print(f"  Public.com value:     ${public_cur:.2f}  (deposited ${PUBLIC_INITIAL_DEPOSIT:.2f})")
-    print(f"  Kalshi total:         ${kalshi['total_value']:.2f}  (cash ${kalshi['balance']:.2f} + positions ${kalshi['portfolio_value']:.2f}  |  deposited ${kalshi_total_deposited:.2f}, withdrew ${kalshi_total_withdrawn:.2f})")
-    print(f"  Total current:        ${total_cur:.2f}")
+    print(f"  Public.com value:       ${public_cur:.2f}  (deposited ${PUBLIC_INITIAL_DEPOSIT:.2f})")
+    print(f"  Kalshi total:           ${kalshi['total_value']:.2f}  (cash ${kalshi['balance']:.2f} + positions ${kalshi['portfolio_value']:.2f})")
+    print(f"    deposited ${kalshi_total_deposited:.2f}, withdrew ${kalshi_total_withdrawn:.2f}")
+    print(f"  Total current:          ${total_cur:.2f}")
     print()
-    print(f"  Public gross P&L:     ${public_gross_pnl:+.2f}")
-    print(f"  Kalshi gross P&L:     ${kalshi_gross_pnl:+.2f}  (incl. ${kalshi_total_withdrawn:.2f} withdrawn)")
-    print(f"  Total gross P&L:      ${gross_pnl:+.2f}")
-    print(f"  Costs (prorated):    -${total_cost:.2f}")
-    print(f"  Net P&L:              ${net_pnl:+.2f}  ({net_pct:+.2f}% on capital deployed)")
-    print(f"  HYSA benchmark:       ${hysa_gain:.2f}")
-    print(f"  Alpha vs HYSA:        ${alpha:+.2f}")
+    print(f"  ── Realized P&L (closed positions) ──")
+    print(f"  Public realized:        ${public_realized:+.2f}")
+    print(f"  Kalshi realized:        ${kalshi_gross_pnl:+.2f}  (incl. ${kalshi_total_withdrawn:.2f} withdrawn)")
+    print(f"  Total realized:         ${realized_gross_pnl:+.2f}")
     print()
-    print(f"  Public trades logged: {len(public_trades)}")
-    print(f"  Public open pos:      {len(public['open_positions'])}")
-    print(f"  Kalshi closed:        {len(kalshi_trades)}  ({kalshi_wins}W {kalshi_losses}L)")
-    print(f"  Kalshi open pos:      {len(kalshi['open_positions'])}")
+    print(f"  ── Unrealized (open positions, still moving) ──")
+    print(f"  Public unrealized:      ${public_unrealized:+.2f}  ({len(public['open_positions'])} positions)")
+    print()
+    print(f"  Costs (prorated):      -${total_cost:.2f}")
+    print(f"  Net P&L (realized):     ${net_pnl:+.2f}  ({net_pct:+.2f}% on capital)")
+    print(f"  HYSA benchmark:         ${hysa_gain:.2f}")
+    print(f"  Alpha vs HYSA:          ${alpha:+.2f}")
+    print()
+    print(f"  Public trades logged:   {len(public_trades)}")
+    print(f"  Kalshi closed:          {len(kalshi_trades)}  ({kalshi_wins}W {kalshi_losses}L)")
+    print(f"  Kalshi open pos:        {len(kalshi['open_positions'])}")
     print("=" * W)
 
 

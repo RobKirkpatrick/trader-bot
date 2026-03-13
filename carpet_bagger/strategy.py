@@ -9,7 +9,7 @@ All dollar amounts are floats.
 # Pre-game scout filter
 # ---------------------------------------------------------------------------
 PRE_GAME_MIN = 0.55   # minimum yes_ask to add to watchlist
-PRE_GAME_MAX = 0.80   # maximum yes_ask to add to watchlist — above 80% pre-game, in-game upside is limited
+PRE_GAME_MAX = 0.70   # maximum yes_ask to add to watchlist — only moderate pre-game favorites; 80%+ during game = in-game signal
 MIN_MINS_TO_GAME  = 30    # skip markets starting within this many minutes
 MAX_GAME_AGE_MINS = 90    # skip games that started more than 90 min ago (too late to catch in-game)
 MAX_CLOSE_HOURS   = 36    # only track markets that resolve within 36 hours
@@ -20,8 +20,8 @@ MAX_CLOSE_HOURS   = 36    # only track markets that resolve within 36 hours
 # ---------------------------------------------------------------------------
 STOP_LOSS    = 0.35   # sell if yes_ask drops below this
 MAX_POSITIONS = 10    # max simultaneous open positions
-MAX_POSITION_DOLLARS = 25.00  # hard cap per position regardless of tier fraction
-BUY_CUTOFF_HOUR_ET = 15      # stop watching (no new buys) after 3 PM ET
+MAX_POSITION_PCT = 0.50       # max fraction of live balance per position (auto-scales with bankroll)
+BUY_CUTOFF_HOUR_ET = 23      # stop watching (no new buys) after 11 PM ET — covers all evening NBA/NHL
 
 # ---------------------------------------------------------------------------
 # Tiered position sizing (fraction of available float per tier)
@@ -50,12 +50,12 @@ SPORT_SERIES = [
 ]
 
 SPORT_RULES: dict[str, dict] = {
-    "KXNBAGAMES":   {"window_open": "Q2_start",  "window_close": "Q3_end",   "take_profit": 0.95},
-    "KXNBAGAME":    {"window_open": "Q2_start",  "window_close": "Q3_end",   "take_profit": 0.95},
-    "KXNHLGAME":    {"window_open": "P1_end",    "window_close": "P3_start", "take_profit": 0.95},
-    "KXNCAABGAME":  {"window_open": "H1_10min",  "window_close": "H2_start", "take_profit": 0.95},
-    "KXNCAABBGAME": {"window_open": "H1_10min",  "window_close": "H2_start", "take_profit": 0.95},
-    "KXNCAAWBGAME": {"window_open": "H1_10min",  "window_close": "H2_start", "take_profit": 0.95},
+    "KXNBAGAMES":   {"window_open": "Q2_start",  "window_close": "Q3_end",   "take_profit": 0.98},
+    "KXNBAGAME":    {"window_open": "Q2_start",  "window_close": "Q3_end",   "take_profit": 0.98},
+    "KXNHLGAME":    {"window_open": "P1_end",    "window_close": "P3_start", "take_profit": 0.98},
+    "KXNCAABGAME":  {"window_open": "H1_10min",  "window_close": "H2_start", "take_profit": 0.98},
+    "KXNCAABBGAME": {"window_open": "H1_10min",  "window_close": "H2_start", "take_profit": 0.98},
+    "KXNCAAWBGAME": {"window_open": "H1_10min",  "window_close": "H2_start", "take_profit": 0.98},
     "KXMLBGAME":    {"window_open": "inning_3",  "window_close": "inning_7", "take_profit": 0.92},
 }
 

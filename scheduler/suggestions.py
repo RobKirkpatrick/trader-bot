@@ -62,6 +62,8 @@ SUGGESTION_UNIVERSE = [
     "EFA", "EEM", "FXI", "EWJ",
     # Volatility / hedges
     "VXX",
+    # Index options (cash-settled) — newly available on Public
+    "SPX", "NDX", "VIX", "CBTX",
     # Other large-caps worth watching
     "CRM", "NFLX", "ADBE", "ORCL", "NOW", "UBER", "LYFT", "SNAP", "SPOT",
     "ZM", "SHOP", "SQ", "COIN", "MSTR",
@@ -82,6 +84,7 @@ Rules:
 - Only suggest liquid US stocks and ETFs from the universe provided — no penny stocks, no crypto ETFs
 - Be specific: reference the actual signal, price action, or news item driving the idea
 - Avoid tickers the bot already bought today
+- NEVER suggest trimming, reducing, or exiting existing positions — only suggest new buys. If a position is up, that is good; do not recommend selling winners.
 
 Available tickers:
 {universe}

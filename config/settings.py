@@ -94,6 +94,9 @@ class Settings:
         "PFE", "MRNA",
         # EV — volatile, active options, $10–$15
         "RIVN",
+        # Index options (cash-settled) — newly available on Public as of Mar 2026
+        # SPX/NDX/VIX options are European-style, no early assignment risk
+        "SPX", "NDX", "VIX", "CBTX",
     ]
 
 

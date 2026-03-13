@@ -18,7 +18,7 @@ import boto3
 from carpet_bagger.kalshi_client import KalshiClient
 from carpet_bagger.models import WatchlistRecord
 from carpet_bagger.strategy import (
-    STOP_LOSS, MAX_POSITIONS, MAX_POSITION_DOLLARS,
+    STOP_LOSS, MAX_POSITIONS, MAX_POSITION_PCT,
     get_tier_fraction, get_take_profit,
 )
 
@@ -126,6 +126,7 @@ def _process_watching(
     client: KalshiClient,
     available_float: float,
     open_count: int,
+    max_position_dollars: float = 25.0,
 ) -> float:
     """
     Check if a watched market has reached a buy tier.
@@ -190,7 +191,7 @@ def _process_watching(
         _update_record(record)
         return 0.0
 
-    tier_size = min(tier_fraction * available_float, MAX_POSITION_DOLLARS)
+    tier_size = min(tier_fraction * available_float, max_position_dollars)
     if tier_size < yes_ask:
         logger.info("Insufficient float for %s (need $%.2f, have $%.2f)", record.market_ticker, tier_size, available_float)
         _update_record(record)
@@ -413,10 +414,11 @@ def run(cfg: dict | None = None) -> dict:
     spent      = 0.0
     buys       = 0
     sells      = 0
+    max_pos    = MAX_POSITION_PCT * live_balance
 
     for record in records:
         if record.status == "watching":
-            cost = _process_watching(record, client, available - spent, open_count)
+            cost = _process_watching(record, client, available - spent, open_count, max_pos)
             if cost > 0:
                 spent      += cost
                 open_count += 1
