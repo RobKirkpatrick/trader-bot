@@ -20,6 +20,14 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
+_INDEX_SYMBOLS = {"SPX", "NDX", "VIX", "CBTX", "RUT", "DJX"}
+
+
+def _instrument_type(symbol: str) -> str:
+    """Return Public.com instrument type for a symbol (INDEX or EQUITY)."""
+    return "INDEX" if symbol.upper() in _INDEX_SYMBOLS else "EQUITY"
+
+
 def _parse_osi_strike(osi_symbol: str) -> float:
     """Extract strike price from an OSI option symbol (last 8 digits represent cents × 10)."""
     try:
@@ -221,7 +229,7 @@ class PublicClient:
         resp = requests.post(
             url,
             headers=self._headers(),
-            json={"instruments": [{"symbol": s, "type": "EQUITY"} for s in symbols]},
+            json={"instruments": [{"symbol": s, "type": _instrument_type(s)} for s in symbols]},
             timeout=10,
         )
         resp.raise_for_status()
@@ -387,7 +395,7 @@ class PublicClient:
         resp = requests.post(
             url,
             headers=self._headers(),
-            json={"instrument": {"symbol": symbol.upper(), "type": "EQUITY"}},
+            json={"instrument": {"symbol": symbol.upper(), "type": _instrument_type(symbol)}},
             timeout=10,
         )
         resp.raise_for_status()
@@ -417,7 +425,7 @@ class PublicClient:
         resp = requests.post(
             url,
             headers=self._headers(),
-            json={"instrument": {"symbol": symbol.upper(), "type": "EQUITY"}, "expirationDate": expiration},
+            json={"instrument": {"symbol": symbol.upper(), "type": _instrument_type(symbol)}, "expirationDate": expiration},
             timeout=10,
         )
         resp.raise_for_status()
