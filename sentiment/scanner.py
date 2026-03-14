@@ -87,6 +87,7 @@ class TickerSentiment:
     earnings_imminent: bool = False  # reports within 7 days
     signal: str = "neutral"         # "bullish" | "bearish" | "neutral"
     articles: list[ArticleSentiment] = field(default_factory=list)
+    macro_events: list[str] = field(default_factory=list)  # top headlines from today's macro scan
 
 
 class SentimentScanner:
@@ -243,6 +244,7 @@ class SentimentScanner:
                 earnings_surprise=earn_surprise,
                 earnings_imminent=(earn_boost > 0),
                 signal=signal,
+                macro_events=macro_events[:5],
             )
             results.append(ts)
             logger.info(

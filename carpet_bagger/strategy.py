@@ -22,6 +22,7 @@ STOP_LOSS    = 0.35   # sell if yes_ask drops below this
 MAX_POSITIONS = 10    # max simultaneous open positions
 MAX_POSITION_PCT = 0.50       # max fraction of live balance per position (auto-scales with bankroll)
 BUY_CUTOFF_HOUR_ET = 23      # stop watching (no new buys) after 11 PM ET — covers all evening NBA/NHL
+PRE_GAME_BUY_FRACTION = 0.15 # fraction of available float to stake pre-game (before tip-off) for fee advantage
 
 # ---------------------------------------------------------------------------
 # Tiered position sizing (fraction of available float per tier)
@@ -43,11 +44,19 @@ SPORT_SERIES = [
     "KXNBAGAME",     # NBA individual game winner (alternate/daily series)
     "KXNHLGAME",     # NHL individual game winner
     "KXNCAABGAME",   # NCAAB men's basketball game winner (regular season + conf tournaments)
-    "KXNCAABBGAME",  # NCAAB men's basketball game winner (alternate series, March Madness)
+    # "KXNCAABBGAME" is NCAA BASEBALL — blocked below
     "KXNCAAWBGAME",  # NCAAW women's basketball game winner
-    "KXMLBGAME",     # MLB individual game winner
+    # "KXMLBGAME",   # MLB — paused during March Madness
     # Excluded: golf (KXPGA*), racing (KXNASCAR*, KXF1*) — multiple competitors, not head-to-head
 ]
+
+# Series blocked from dynamic discovery — will never be added even if Kalshi lists them
+BLOCKED_SPORT_SERIES: set[str] = {
+    "KXMLBGAME",      # MLB — paused during March Madness
+    "KXNCAABBGAME",   # NCAA BASEBALL (not basketball!) — blocked permanently
+    "KXNCAABASEGAME", # NCAA Baseball alternate series — blocked
+    "KXMLBSTGAME",    # MLB Spring Training — low liquidity, long games
+}
 
 SPORT_RULES: dict[str, dict] = {
     "KXNBAGAMES":   {"window_open": "Q2_start",  "window_close": "Q3_end",   "take_profit": 0.98},

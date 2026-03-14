@@ -18,13 +18,14 @@ class WatchlistRecord:
     current_prob: float         # most recently fetched yes_ask
     status: str                 # watching | bought | closed
 
-    position_size: float = 0.0      # dollars deployed
+    position_size: float = 0.0      # dollars deployed (total including pre-game stake)
     contract_count: int = 0         # Kalshi contracts held
     entry_price: float = 0.0        # yes_price at buy (in dollars)
     peak_prob: float = 0.0          # highest yes_ask seen since entry (for trailing stop)
     trigger_time: str = ""          # ISO-8601 when buy order placed
     pnl: float = 0.0                # realised P&L in dollars (negative = loss)
     last_updated: str = ""          # ISO-8601 of last DynamoDB write
+    pre_game_staked: float = 0.0    # dollars spent in pre-game stake (15% tier, before tip-off)
 
     def to_dynamodb(self) -> dict:
         return {
@@ -40,8 +41,9 @@ class WatchlistRecord:
             "entry_price":   {"N": str(self.entry_price)},
             "peak_prob":     {"N": str(self.peak_prob)},
             "trigger_time":  {"S": self.trigger_time},
-            "pnl":           {"N": str(self.pnl)},
-            "last_updated":  {"S": self.last_updated},
+            "pnl":             {"N": str(self.pnl)},
+            "last_updated":    {"S": self.last_updated},
+            "pre_game_staked": {"N": str(self.pre_game_staked)},
         }
 
     @classmethod
@@ -59,6 +61,7 @@ class WatchlistRecord:
             entry_price   = float(item.get("entry_price",   {"N": "0"})["N"]),
             peak_prob     = float(item.get("peak_prob",     {"N": "0"})["N"]),
             trigger_time  = item.get("trigger_time",  {"S": ""})["S"],
-            pnl           = float(item.get("pnl",           {"N": "0"})["N"]),
-            last_updated  = item.get("last_updated",  {"S": ""})["S"],
+            pnl              = float(item.get("pnl",              {"N": "0"})["N"]),
+            last_updated     = item.get("last_updated",   {"S": ""})["S"],
+            pre_game_staked  = float(item.get("pre_game_staked",  {"N": "0"})["N"]),
         )

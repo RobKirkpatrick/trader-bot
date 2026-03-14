@@ -15,7 +15,7 @@ from datetime import datetime, timezone, date as _date
 
 import boto3
 
-from carpet_bagger.kalshi_client import KalshiClient
+from carpet_bagger.kalshi_client import KalshiClient, parse_market_price
 from carpet_bagger.models import WatchlistRecord
 from carpet_bagger.strategy import (
     STOP_LOSS, MAX_POSITIONS, MAX_POSITION_PCT,
@@ -146,7 +146,7 @@ def _process_watching(
             record.pnl = 0.0
             _update_record(record)
             return 0.0
-        yes_ask = market.get("yes_ask", 0) / 100.0
+        yes_ask = parse_market_price(market, "yes_ask")
 
         # Gate 1: game date must be today (parsed from ticker) — prevents buying
         # next-day markets where Kalshi's open_time reflects market creation, not tip-off.
@@ -161,16 +161,38 @@ def _process_watching(
 
         # Gate 2: Kalshi open_time must be in the past (game has actually tipped off)
         open_time_str = market.get("open_time", "")
+        game_started = True
         if open_time_str:
             try:
                 open_dt = datetime.fromisoformat(open_time_str.replace("Z", "+00:00"))
                 if open_dt > datetime.now(timezone.utc):
-                    logger.debug("Game not yet started for %s (open_time=%s) — holding", record.market_ticker, open_time_str)
-                    record.current_prob = yes_ask
-                    _update_record(record)
-                    return 0.0
+                    game_started = False
             except ValueError:
                 pass
+
+        if not game_started:
+            # Pre-game stake: buy 15% of float at current pre-game price for fee advantage.
+            # Only once per record (pre_game_staked == 0).
+            from carpet_bagger.strategy import PRE_GAME_BUY_FRACTION, PRE_GAME_MIN, PRE_GAME_MAX
+            if record.pre_game_staked == 0.0 and PRE_GAME_MIN <= yes_ask <= PRE_GAME_MAX:
+                stake = min(PRE_GAME_BUY_FRACTION * available_float, max_position_dollars * PRE_GAME_BUY_FRACTION)
+                if stake >= yes_ask:
+                    try:
+                        result = client.place_buy(record.market_ticker, yes_ask, stake)
+                        order_data     = result.get("order", {}) if isinstance(result, dict) else {}
+                        contract_count = int(order_data.get("fill_count", 0)) or max(1, int(stake / yes_ask))
+                        actual_cost    = contract_count * yes_ask
+                        record.pre_game_staked = actual_cost
+                        record.contract_count  = contract_count
+                        record.current_prob    = yes_ask
+                        _update_record(record)
+                        logger.info("Pre-game stake %s: %d contracts @ %.2f ($%.2f)", record.market_ticker, contract_count, yes_ask, actual_cost)
+                        return actual_cost
+                    except Exception as exc:
+                        logger.warning("Pre-game stake failed for %s: %s", record.market_ticker, exc)
+            record.current_prob = yes_ask
+            _update_record(record)
+            return 0.0
     except Exception as exc:
         logger.warning("Could not fetch market for %s: %s", record.market_ticker, exc)
         return 0.0
@@ -192,27 +214,36 @@ def _process_watching(
         return 0.0
 
     tier_size = min(tier_fraction * available_float, max_position_dollars)
-    if tier_size < yes_ask:
-        logger.info("Insufficient float for %s (need $%.2f, have $%.2f)", record.market_ticker, tier_size, available_float)
-        _update_record(record)
+    # Subtract any pre-game stake already placed — only deploy the incremental amount
+    incremental = max(0.0, tier_size - record.pre_game_staked)
+    if incremental < yes_ask:
+        if record.pre_game_staked > 0.0:
+            # Already have a pre-game stake — mark bought with what we have
+            record.status        = "bought"
+            record.entry_price   = yes_ask
+            record.position_size = record.pre_game_staked
+            record.trigger_time  = datetime.now(timezone.utc).isoformat()
+            _update_record(record)
+        else:
+            logger.info("Insufficient float for %s (need $%.2f, have $%.2f)", record.market_ticker, tier_size, available_float)
+            _update_record(record)
         return 0.0
 
-    # Place buy
+    # Place in-game buy for incremental amount
     try:
-        result = client.place_buy(record.market_ticker, yes_ask, tier_size)
+        result = client.place_buy(record.market_ticker, yes_ask, incremental)
     except Exception as exc:
         logger.error("Buy order failed for %s: %s", record.market_ticker, exc)
         return 0.0
 
-    # Use actual filled count from order response (not the requested count)
     order_data     = result.get("order", {}) if isinstance(result, dict) else {}
-    contract_count = int(order_data.get("fill_count", 0)) or max(1, int(tier_size / yes_ask))
+    contract_count = int(order_data.get("fill_count", 0)) or max(1, int(incremental / yes_ask))
     actual_cost    = contract_count * yes_ask
 
     record.status         = "bought"
     record.entry_price    = yes_ask
-    record.position_size  = actual_cost
-    record.contract_count = contract_count
+    record.position_size  = record.pre_game_staked + actual_cost
+    record.contract_count = record.contract_count + contract_count
     record.trigger_time   = datetime.now(timezone.utc).isoformat()
     _update_record(record)
 
@@ -230,8 +261,7 @@ def _process_bought(record: WatchlistRecord, client: KalshiClient) -> None:
         return
 
     market_status = (market.get("status") or "").lower()
-    yes_ask_cents = market.get("yes_ask", 0)
-    yes_ask       = yes_ask_cents / 100.0
+    yes_ask = parse_market_price(market, "yes_ask")
 
     record.current_prob = yes_ask
 

@@ -49,6 +49,14 @@ _SYSTEM_PROMPT = (
     "Your position sizing is based on live account balance "
     "provided in every request — never assume a fixed account size. "
     "Never risk more than 5% of current cash_balance on a single trade. "
+    "Directional bias rules: "
+    "When a symbol is SPY, QQQ, or IWM and the sentiment score is strongly negative "
+    "(below -0.35) AND macro score is also negative, prefer PUT options over calls — "
+    "broad market weakness is a valid thesis, not just individual stock signals. "
+    "When a symbol is an oil/energy name (XLE, OXY, CVX, XOM) and macro headlines "
+    "indicate a geopolitical supply disruption (Hormuz, sanctions, conflict), "
+    "treat this as a high-conviction CALL setup regardless of short-term price action. "
+    "Macro thesis trades have a longer time horizon — prefer 30-60 DTE contracts. "
     "Always respond in valid JSON only. No prose, no explanation "
     "outside the JSON structure."
 )
@@ -213,12 +221,14 @@ def build_data_bundle(
 
     bundle: dict = {
         "sentiment": {
-            "symbol":     ts.ticker,
-            "score":      round(ts.score, 4),
-            "direction":  ts.signal,
-            "confidence": confidence,
-            "headline":   headline,
-            "source":     source,
+            "symbol":       ts.ticker,
+            "score":        round(ts.score, 4),
+            "direction":    ts.signal,
+            "confidence":   confidence,
+            "headline":     headline,
+            "source":       source,
+            "macro_score":  round(ts.macro_score, 4),
+            "macro_events": ts.macro_events,
         },
         "quote": quote,
         "top_contracts": top_contracts,
