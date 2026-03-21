@@ -238,11 +238,40 @@ _upsert_schedule "trading-bot-weekly"      "0 18 ? * SUN *"      "weekly_review"
 
 # Carpet Bagger — Kalshi sports prediction market schedules (daily, all days)
 _upsert_schedule "carpet-bagger-scout"   "0 8 ? * MON-SUN *"   "carpet_bagger_scout"   "Carpet Bagger pre-game scout 08:00 ET daily"
-_upsert_schedule "carpet-bagger-monitor" "0/5 11-23 ? * MON-SUN *" "carpet_bagger_monitor" "Carpet Bagger in-game monitor every 5 min 11am-midnight ET"
+_upsert_schedule "carpet-bagger-monitor" "0/5 10-23 ? * MON-SUN *" "carpet_bagger_monitor" "Carpet Bagger in-game monitor every 5 min 11am-midnight ET"
 _upsert_schedule "carpet-bagger-summary" "59 23 ? * MON-SUN *"  "carpet_bagger_summary" "Carpet Bagger nightly summary 11:59 PM ET"
 
 # EDGAR 8-K monitor — stock catalyst detection, every 5 min during market hours
 _upsert_schedule "edgar-monitor" "0/5 8-16 ? * MON-FRI *" "edgar_scan" "EDGAR 8-K monitor every 5 min 8am-4pm ET weekdays"
+
+# Hormuz macro trade monitor — daily P&L check at 4:00 PM ET (after market close)
+_upsert_schedule "hormuz-monitor" "0 16 ? * MON-FRI *" "hormuz_monitor" "Hormuz trade P&L monitor 16:00 ET weekdays"
+
+# Hormuz one-shot trade execution — 9:35 AM ET 2026-03-14, fires once then self-deletes
+HORMUZ_TARGET=$(python3 -c "
+import json
+print(json.dumps({
+    'Arn':     '${LAMBDA_ARN}',
+    'RoleArn': '${SCHED_ROLE_ARN}',
+    'Input':   json.dumps({'window': 'hormuz_trade'}),
+}))
+")
+if ! aws scheduler get-schedule --name "hormuz-trade-exec" --region "${REGION}" \
+        --output text > /dev/null 2>&1; then
+    aws scheduler create-schedule \
+        --name "hormuz-trade-exec" \
+        --schedule-expression "at(2026-03-13T09:35:00)" \
+        --schedule-expression-timezone "America/New_York" \
+        --flexible-time-window '{"Mode":"OFF"}' \
+        --action-after-completion "DELETE" \
+        --target "${HORMUZ_TARGET}" \
+        --description "Hormuz trade one-shot execution at market open 2026-03-13" \
+        --region "${REGION}" \
+        --output text > /dev/null
+    echo "    Created one-shot schedule: hormuz-trade-exec (fires 2026-03-13 09:35 ET, then deletes)"
+else
+    echo "    hormuz-trade-exec already exists — skipping (delete it first to reschedule)"
+fi
 
 # ---------------------------------------------------------------------------
 # 6b. Carpet Bagger — DynamoDB table + Lambda IAM permissions

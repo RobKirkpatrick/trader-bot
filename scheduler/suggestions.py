@@ -55,7 +55,7 @@ SUGGESTION_UNIVERSE = [
     # Sector ETFs
     "XLK", "XLF", "XLV", "XLE", "XLI", "XLY", "XLP", "XLRE",
     # Commodities / safe havens (macro / uncertainty plays)
-    "GLD", "SLV", "USO", "UNG", "PDBC",
+    "GLD", "SLV", "USO", "BNO", "UNG", "PDBC",  # BNO = Brent crude ETF (Hormuz/Iran plays)
     # Innovation / growth
     "ARKK", "ARKG", "ARKW",
     # International / emerging markets
@@ -78,9 +78,19 @@ Your job:
 3. Avoid anything the bot already bought today (listed in the research)
 
 Rules:
-- Each suggestion must be between $2 and $5
+- Default suggestion size: $2–$10 for individual stock/ETF buys
+- Macro thesis options exception: if there is a high-conviction directional thesis backed by
+  the day's research (broad market sell-off, geopolitical supply disruption, sector event),
+  you may suggest a single options contract up to $200. Mark these with "type": "options"
+  and include the specific strike and expiry (~30 DTE) in the rationale.
+- Bearish macro: if broad market sentiment is strongly negative and SPY/QQQ are showing
+  weakness vs expectations, consider a SPY PUT or QQQ PUT. State the thesis clearly.
+- Bullish macro: if geopolitical events create a sector tailwind (oil/Iran/Hormuz disruption
+  → XLE/BNO/OXY calls, defense conflict → ITA calls), suggest the specific options play not
+  just the stock. XLE and BNO are complementary — XLE for broad energy sector exposure,
+  BNO (Brent crude ETF) for direct crude supply disruption. Both are valid; suggest either
+  or both when the thesis supports it.
 - Prefer divergence plays: strong fundamentals/news but price hasn't moved yet, or pullback after positive catalyst
-- Include thematic macro plays based on the day's geopolitical or economic events
 - Only suggest liquid US stocks and ETFs from the universe provided — no penny stocks, no crypto ETFs
 - Be specific: reference the actual signal, price action, or news item driving the idea
 - Avoid tickers the bot already bought today
@@ -91,9 +101,10 @@ Available tickers:
 
 Respond ONLY with valid JSON — no markdown, no preamble:
 [
-  {{"ticker": "AAPL", "rationale": "Fell 2.1% today despite strong product event. Oversold on high WSB volume — good entry.", "dollars": 3.0}},
-  {{"ticker": "ITA",  "rationale": "Macro: escalating Iran conflict. Defense ETFs historically outperform. Scanner scored macro -0.62 (bearish) which makes defense a natural hedge.", "dollars": 5.0}},
-  {{"ticker": "NVDA", "rationale": "Price signal +0.64, WSB rank 4 with 7x mention surge. Already trading well above threshold — adding here before tomorrow's open.", "dollars": 2.0}}
+  {{"ticker": "AAPL", "rationale": "Fell 2.1% today despite strong product event. Oversold on high WSB volume — good entry.", "dollars": 3.0, "type": "stock"}},
+  {{"ticker": "SPY",  "rationale": "Macro: broad market up on no fundamental catalyst, macro score -0.71. SPY $665P Apr 10 (~$13.50) — bearish divergence thesis, 28 DTE.", "dollars": 135.0, "type": "options"}},
+  {{"ticker": "XLE",  "rationale": "Iran/Hormuz crisis: XLE captures broad energy sector (producers + refiners). XLE $90C Apr 17 (~$2.00) — energy sector call on supply disruption.", "dollars": 200.0, "type": "options"}},
+  {{"ticker": "BNO",  "rationale": "Iran/Hormuz crisis: BNO is the direct Brent crude proxy. BNO $26C Apr 17 (~$1.50) — complements XLE with more direct crude exposure.", "dollars": 150.0, "type": "options"}}
 ]"""
 
 
@@ -278,7 +289,7 @@ def generate_suggestions(
         for s in suggestions[:3]:
             ticker    = str(s.get("ticker", "")).upper().strip()
             dollars   = float(s.get("dollars", settings.SUGGESTION_DOLLARS_DEFAULT))
-            dollars   = round(max(2.0, min(5.0, dollars)), 2)
+            dollars   = round(max(2.0, min(10.0, dollars)), 2)
             rationale = str(s.get("rationale", "")).strip()
             if ticker and rationale:
                 result.append({"ticker": ticker, "rationale": rationale, "dollars": dollars})

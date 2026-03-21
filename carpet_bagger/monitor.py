@@ -18,8 +18,9 @@ import boto3
 from carpet_bagger.kalshi_client import KalshiClient, parse_market_price
 from carpet_bagger.models import WatchlistRecord
 from carpet_bagger.strategy import (
-    STOP_LOSS, MAX_POSITIONS, MAX_POSITION_PCT,
-    get_tier_fraction, get_take_profit,
+    STOP_LOSS, TAKE_PROFIT, MAX_POSITIONS, MAX_POSITION_PCT, MAX_POSITION_DOLLARS,
+    PRE_GAME_MIN, PRE_GAME_MAX,
+    get_take_profit,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ _REGION = "us-east-2"
 # Monitor only fires trades during 11am–midnight ET.
 # The EventBridge schedule runs every 5 min all day; this guard prevents
 # unnecessary API calls during overnight hours.
-_MONITOR_START_ET = 11   # 11am
+_MONITOR_START_ET = 10   # 10am — catches early afternoon games (conf tournaments, March Madness noon tip-offs)
 _MONITOR_END_ET   = 24   # midnight (exclusive)
 
 
@@ -126,17 +127,17 @@ def _process_watching(
     client: KalshiClient,
     available_float: float,
     open_count: int,
-    max_position_dollars: float = 25.0,
+    max_position_dollars: float = MAX_POSITION_DOLLARS,
 ) -> float:
     """
-    Check if a watched market has reached a buy tier.
+    Buy strategy: as soon as today's game is at 55–75%, deploy up to $5.
+    Immediately place a resting sell limit at $0.97 after the buy fills.
     Returns dollars spent (0 if no buy placed).
     """
     if open_count >= MAX_POSITIONS:
         logger.debug("Max positions reached — skipping %s", record.market_ticker)
         return 0.0
 
-    # Skip if market already finalized
     try:
         market = client.get_market(record.market_ticker)
         market_status = (market.get("status") or "").lower()
@@ -146,114 +147,98 @@ def _process_watching(
             record.pnl = 0.0
             _update_record(record)
             return 0.0
+
         yes_ask = parse_market_price(market, "yes_ask")
 
-        # Gate 1: game date must be today (parsed from ticker) — prevents buying
-        # next-day markets where Kalshi's open_time reflects market creation, not tip-off.
+        # Must be today's game
         from zoneinfo import ZoneInfo
         today_et = datetime.now(ZoneInfo("America/New_York")).date()
         game_date = _game_date_from_ticker(record.market_ticker)
         if game_date is not None and game_date > today_et:
-            logger.debug("Game %s is on %s — not today (%s), holding", record.market_ticker, game_date, today_et)
+            logger.debug("Game %s is on %s — not today, holding", record.market_ticker, game_date)
             record.current_prob = yes_ask
             _update_record(record)
             return 0.0
 
-        # Gate 2: Kalshi open_time must be in the past (game has actually tipped off)
+        # Game must have already started — no pre-game buys, absorb the 2¢ in-game fee
         open_time_str = market.get("open_time", "")
-        game_started = True
         if open_time_str:
             try:
                 open_dt = datetime.fromisoformat(open_time_str.replace("Z", "+00:00"))
                 if open_dt > datetime.now(timezone.utc):
-                    game_started = False
+                    logger.debug("Game %s hasn't started yet — skipping pre-game buy", record.market_ticker)
+                    record.current_prob = yes_ask
+                    _update_record(record)
+                    return 0.0
             except ValueError:
                 pass
 
-        if not game_started:
-            # Pre-game stake: buy 15% of float at current pre-game price for fee advantage.
-            # Only once per record (pre_game_staked == 0).
-            from carpet_bagger.strategy import PRE_GAME_BUY_FRACTION, PRE_GAME_MIN, PRE_GAME_MAX
-            if record.pre_game_staked == 0.0 and PRE_GAME_MIN <= yes_ask <= PRE_GAME_MAX:
-                stake = min(PRE_GAME_BUY_FRACTION * available_float, max_position_dollars * PRE_GAME_BUY_FRACTION)
-                if stake >= yes_ask:
-                    try:
-                        result = client.place_buy(record.market_ticker, yes_ask, stake)
-                        order_data     = result.get("order", {}) if isinstance(result, dict) else {}
-                        contract_count = int(order_data.get("fill_count", 0)) or max(1, int(stake / yes_ask))
-                        actual_cost    = contract_count * yes_ask
-                        record.pre_game_staked = actual_cost
-                        record.contract_count  = contract_count
-                        record.current_prob    = yes_ask
-                        _update_record(record)
-                        logger.info("Pre-game stake %s: %d contracts @ %.2f ($%.2f)", record.market_ticker, contract_count, yes_ask, actual_cost)
-                        return actual_cost
-                    except Exception as exc:
-                        logger.warning("Pre-game stake failed for %s: %s", record.market_ticker, exc)
+        # Price must still be in the buy window (55–75%)
+        if not (PRE_GAME_MIN <= yes_ask <= PRE_GAME_MAX):
+            logger.debug("Game %s at %.0f%% — outside buy window [%.0f%%–%.0f%%]",
+                         record.market_ticker, yes_ask * 100, PRE_GAME_MIN * 100, PRE_GAME_MAX * 100)
             record.current_prob = yes_ask
             _update_record(record)
             return 0.0
+
     except Exception as exc:
         logger.warning("Could not fetch market for %s: %s", record.market_ticker, exc)
         return 0.0
 
-    record.current_prob = yes_ask
-
-    tier_fraction = get_tier_fraction(yes_ask)
-    if tier_fraction == 0.0:
-        _update_record(record)
-        return 0.0   # not in a buy tier yet
-
-    # In-game odds must exceed pre-game odds — team must be outperforming expectations
-    if yes_ask < record.pre_game_prob:
-        logger.debug(
-            "In-game odds %.0f%% < pre-game %.0f%% for %s — waiting for outperformance",
-            yes_ask * 100, record.pre_game_prob * 100, record.market_ticker,
-        )
+    # Cap spend at $5 or available float, whichever is smaller
+    budget = min(available_float, max_position_dollars)
+    if budget < yes_ask:
+        logger.info("Insufficient float for %s (need $%.2f, have $%.2f)", record.market_ticker, yes_ask, budget)
+        record.current_prob = yes_ask
         _update_record(record)
         return 0.0
 
-    tier_size = min(tier_fraction * available_float, max_position_dollars)
-    # Subtract any pre-game stake already placed — only deploy the incremental amount
-    incremental = max(0.0, tier_size - record.pre_game_staked)
-    if incremental < yes_ask:
-        if record.pre_game_staked > 0.0:
-            # Already have a pre-game stake — mark bought with what we have
-            record.status        = "bought"
-            record.entry_price   = yes_ask
-            record.position_size = record.pre_game_staked
-            record.trigger_time  = datetime.now(timezone.utc).isoformat()
-            _update_record(record)
-        else:
-            logger.info("Insufficient float for %s (need $%.2f, have $%.2f)", record.market_ticker, tier_size, available_float)
-            _update_record(record)
-        return 0.0
-
-    # Place in-game buy for incremental amount
+    # Place buy
     try:
-        result = client.place_buy(record.market_ticker, yes_ask, incremental)
+        result = client.place_buy(record.market_ticker, yes_ask, budget)
     except Exception as exc:
         logger.error("Buy order failed for %s: %s", record.market_ticker, exc)
         return 0.0
 
     order_data     = result.get("order", {}) if isinstance(result, dict) else {}
-    contract_count = int(order_data.get("fill_count", 0)) or max(1, int(incremental / yes_ask))
+    contract_count = int(order_data.get("fill_count", 0)) or max(1, int(budget / yes_ask))
     actual_cost    = contract_count * yes_ask
+
+    # Immediately place resting sell limit at $0.97
+    take_profit = get_take_profit(record.sport)
+    sell_order_id = ""
+    try:
+        sell_result   = client.place_sell(record.market_ticker, contract_count, yes_bid_dollars=take_profit)
+        sell_order_id = (sell_result.get("order", {}) if isinstance(sell_result, dict) else {}).get("order_id", "")
+        logger.info("Resting sell placed for %s: %d contracts @ $%.2f [order=%s]",
+                    record.market_ticker, contract_count, take_profit, sell_order_id)
+    except Exception as exc:
+        logger.warning("Resting sell failed for %s: %s — monitor will retry", record.market_ticker, exc)
 
     record.status         = "bought"
     record.entry_price    = yes_ask
-    record.position_size  = record.pre_game_staked + actual_cost
-    record.contract_count = record.contract_count + contract_count
+    record.position_size  = actual_cost
+    record.contract_count = contract_count
     record.trigger_time   = datetime.now(timezone.utc).isoformat()
+    record.sell_order_id  = sell_order_id
+    record.current_prob   = yes_ask
     _update_record(record)
 
-    logger.info("Bought %s: %d contracts @ %.2f ($%.2f)", record.market_ticker, contract_count, yes_ask, actual_cost)
+    logger.info("Bought %s: %d contracts @ $%.2f ($%.2f total) | resting sell @ $%.2f",
+                record.market_ticker, contract_count, yes_ask, actual_cost, TAKE_PROFIT)
     return actual_cost
 
 
 def _process_bought(record: WatchlistRecord, client: KalshiClient) -> None:
-    """Check take-profit, stop-loss, or settlement for a bought position."""
-    # Check market status for settlement
+    """
+    Manage a bought position.
+
+    The resting $0.97 sell limit handles profit-taking automatically.
+    This function only needs to:
+      1. Detect settlement (game ended) and record P&L.
+      2. Ensure a resting sell is in place (place one if missing after a failed attempt).
+      3. Trigger stop-loss if price drops below $0.45 (market flipped — get out).
+    """
     try:
         market = client.get_market(record.market_ticker)
     except Exception as exc:
@@ -262,14 +247,9 @@ def _process_bought(record: WatchlistRecord, client: KalshiClient) -> None:
 
     market_status = (market.get("status") or "").lower()
     yes_ask = parse_market_price(market, "yes_ask")
-
     record.current_prob = yes_ask
 
-    # Track peak probability for trailing stop
-    if yes_ask > record.peak_prob:
-        record.peak_prob = yes_ask
-
-    # Market settled/finalized — record outcome
+    # Market settled — the resting sell either filled or auto-cancelled; record outcome
     if market_status in ("finalized", "settled", "resolved"):
         result = market.get("result", "")
         pnl = (1.0 - record.entry_price) * record.contract_count if result == "yes" else -record.entry_price * record.contract_count
@@ -284,31 +264,35 @@ def _process_bought(record: WatchlistRecord, client: KalshiClient) -> None:
         _publish_sns(msg, f"[TraderBot] Carpet Bagger: Settled {record.teams} ({outcome})")
         return
 
-    take_profit = get_take_profit(record.sport)
+    # Ensure resting sell is in place — retry if the initial placement failed
+    if not record.sell_order_id and record.contract_count > 0:
+        try:
+            sell_result   = client.place_sell(record.market_ticker, record.contract_count, yes_bid_dollars=get_take_profit(record.sport))
+            sell_order_id = (sell_result.get("order", {}) if isinstance(sell_result, dict) else {}).get("order_id", "")
+            record.sell_order_id = sell_order_id
+            logger.info("Placed missing resting sell for %s [order=%s]", record.market_ticker, sell_order_id)
+        except Exception as exc:
+            logger.warning("Resting sell retry failed for %s: %s", record.market_ticker, exc)
 
-    # Take profit
-    if yes_ask >= take_profit:
-        _sell_position(record, client, yes_ask, reason="take_profit")
-        return
-
-    # Trailing stop: if up 40%+ from entry then retrace 15% from peak → sell
-    if record.entry_price > 0 and record.peak_prob > 0:
-        gain_from_entry = (record.peak_prob - record.entry_price) / record.entry_price
-        if gain_from_entry >= 0.40 and yes_ask < record.peak_prob * 0.85:
-            _sell_position(record, client, yes_ask, reason="trailing_stop")
-            return
-
-    # Stop loss: exit if odds drop below 35% floor (regardless of entry price)
-    if record.entry_price > 0 and yes_ask < STOP_LOSS:
+    # Stop-loss: price fell below $0.45 — market has flipped, exit immediately
+    if yes_ask < STOP_LOSS:
         _sell_position(record, client, yes_ask, reason="stop_loss")
         return
 
-    # Still holding — update current prob
+    # Holding — resting sell will auto-fill at $0.97 when the market gets there
     _update_record(record)
 
 
 def _sell_position(record: WatchlistRecord, client: KalshiClient, current_ask: float, reason: str) -> None:
-    """Execute a market sell and close the record."""
+    """Cancel the resting sell order (if any), then market-sell and close the record."""
+    # Cancel resting sell before placing a stop-loss sell to avoid double-sell
+    if record.sell_order_id:
+        try:
+            client.cancel_order(record.sell_order_id)
+            logger.info("Cancelled resting sell %s before stop-loss exit", record.sell_order_id)
+        except Exception as exc:
+            logger.warning("Could not cancel sell order %s: %s — proceeding with stop-loss anyway", record.sell_order_id, exc)
+
     try:
         client.place_sell(record.market_ticker, record.contract_count, yes_bid_dollars=current_ask)
     except Exception as exc:
@@ -320,8 +304,7 @@ def _sell_position(record: WatchlistRecord, client: KalshiClient, current_ask: f
     record.pnl    = round(pnl, 2)
     _update_record(record)
 
-    label = {"take_profit": "SOLD", "trailing_stop": "TRAILING STOP"}.get(reason, "STOP LOSS")
-    logger.info("%s %s: P&L=$%.2f exit_prob=%.2f", label, record.market_ticker, pnl, current_ask)
+    logger.info("STOP LOSS %s: P&L=$%.2f exit_prob=%.2f", record.market_ticker, pnl, current_ask)
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +378,126 @@ def _reconcile_positions(client: KalshiClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Live in-game scanner
+# ---------------------------------------------------------------------------
+
+def _scan_live_games(
+    client: KalshiClient,
+    available_float: float,
+    open_count: int,
+    existing_tickers: set[str],
+) -> tuple[float, int]:
+    """
+    Scan all active sport series for games currently in progress at 55–75%.
+    Buys immediately and places a resting sell — no watchlist pre-population needed.
+
+    This runs every monitor tick and catches games the 8am scout missed,
+    mid-game momentum shifts, and any sport added after the scout ran.
+
+    Returns (dollars_spent, contracts_bought).
+    """
+    from carpet_bagger.strategy import SPORT_SERIES, MAX_POSITION_DOLLARS
+
+    spent    = 0.0
+    bought   = 0
+    now_utc  = datetime.now(timezone.utc)
+
+    for series in SPORT_SERIES:
+        if open_count >= MAX_POSITIONS:
+            break
+        try:
+            markets = client.get_series_markets(series)
+        except Exception as exc:
+            logger.warning("Live scan: failed to fetch %s: %s", series, exc)
+            continue
+
+        for market in markets:
+            if open_count >= MAX_POSITIONS:
+                break
+
+            ticker = market.get("ticker", "")
+            if not ticker or ticker in existing_tickers:
+                continue
+
+            # Game must be in progress — open_time in the past
+            open_time_str = market.get("open_time", "")
+            if open_time_str:
+                try:
+                    open_dt = datetime.fromisoformat(open_time_str.replace("Z", "+00:00"))
+                    if open_dt > now_utc:
+                        continue  # not started yet
+                except ValueError:
+                    pass
+            else:
+                continue  # no open_time — can't confirm in progress
+
+            # Probability filter: 55–75%
+            yes_ask = parse_market_price(market, "yes_ask")
+            if not (PRE_GAME_MIN <= yes_ask <= PRE_GAME_MAX):
+                continue
+
+            # Budget
+            budget = min(available_float - spent, MAX_POSITION_DOLLARS)
+            if budget < yes_ask:
+                logger.debug("Live scan: insufficient float for %s ($%.2f needed, $%.2f available)",
+                             ticker, yes_ask, budget)
+                continue
+
+            # Buy
+            try:
+                result = client.place_buy(ticker, yes_ask, budget)
+            except Exception as exc:
+                logger.error("Live scan buy failed for %s: %s", ticker, exc)
+                continue
+
+            order_data     = result.get("order", {}) if isinstance(result, dict) else {}
+            contract_count = int(order_data.get("fill_count", 0)) or max(1, int(budget / yes_ask))
+            actual_cost    = contract_count * yes_ask
+
+            # Resting sell at sport-specific take-profit
+            take_profit   = get_take_profit(series)
+            sell_order_id = ""
+            try:
+                sell_result   = client.place_sell(ticker, contract_count, yes_bid_dollars=take_profit)
+                sell_order_id = (sell_result.get("order", {}) if isinstance(sell_result, dict) else {}).get("order_id", "")
+            except Exception as exc:
+                logger.warning("Live scan resting sell failed for %s: %s", ticker, exc)
+
+            teams      = market.get("subtitle") or market.get("title") or ticker
+            close_time = market.get("close_time", "")
+
+            record = WatchlistRecord(
+                market_ticker  = ticker,
+                sport          = series,
+                teams          = teams,
+                game_time      = close_time,
+                pre_game_prob  = yes_ask,
+                current_prob   = yes_ask,
+                status         = "bought",
+                position_size  = actual_cost,
+                contract_count = contract_count,
+                entry_price    = yes_ask,
+                trigger_time   = now_utc.isoformat(),
+                sell_order_id  = sell_order_id,
+                last_updated   = now_utc.isoformat(),
+            )
+            try:
+                _update_record(record)
+                existing_tickers.add(ticker)
+                spent      += actual_cost
+                bought     += 1
+                open_count += 1
+                logger.info(
+                    "Live buy: %s | %d contracts @ $%.2f ($%.2f) | resting sell @ $%.2f [%s]",
+                    ticker, contract_count, yes_ask, actual_cost, take_profit, series,
+                )
+            except Exception as exc:
+                logger.error("DynamoDB write failed for live buy %s: %s", ticker, exc)
+
+    return spent, bought
+
+
+# ---------------------------------------------------------------------------
 # Main monitor loop
 # ---------------------------------------------------------------------------
 
@@ -444,30 +547,45 @@ def run(cfg: dict | None = None) -> dict:
     spent      = 0.0
     buys       = 0
     sells      = 0
-    max_pos    = MAX_POSITION_PCT * live_balance
+
+    # Build set of active tickers so live scanner doesn't double-buy
+    existing_tickers = {r.market_ticker for r in records}
 
     for record in records:
         if record.status == "watching":
-            cost = _process_watching(record, client, available - spent, open_count, max_pos)
+            cost = _process_watching(record, client, available - spent, open_count)
             if cost > 0:
                 spent      += cost
                 open_count += 1
                 buys       += 1
 
         elif record.status == "bought":
-            before_status = record.status
             _process_bought(record, client)
             if record.status == "closed":
                 open_count = max(0, open_count - 1)
                 sells += 1
 
+    # Live in-game scanner — finds and buys in-progress games not already in watchlist
+    live_spent, live_buys = 0.0, 0
+    if available - spent >= 1.00 and open_count < MAX_POSITIONS:
+        try:
+            live_spent, live_buys = _scan_live_games(
+                client, available - spent, open_count, existing_tickers
+            )
+            spent      += live_spent
+            open_count += live_buys
+            buys       += live_buys
+        except Exception as exc:
+            logger.warning("Live game scan failed (non-fatal): %s", exc)
+
     return {
-        "window":        "carpet_bagger_monitor",
-        "balance":       round(live_balance, 2),
-        "available":     round(available - spent, 2),
-        "buys":          buys,
-        "sells":         sells,
-        "open_positions":open_count,
+        "window":          "carpet_bagger_monitor",
+        "balance":         round(live_balance, 2),
+        "available":       round(available - spent, 2),
+        "buys":            buys,
+        "sells":           sells,
+        "open_positions":  open_count,
+        "live_scan_buys":  live_buys,
     }
 
 
@@ -539,6 +657,64 @@ def force_sell(cfg: dict | None = None) -> dict:
     _sell_position(record, client, yes_bid, reason="force_sell")
     logger.info("force_sell complete: %s | contracts=%d | price=%.2f", ticker, record.contract_count, yes_bid)
     return {"sold": ticker, "contracts": record.contract_count, "price": yes_bid}
+
+
+# ---------------------------------------------------------------------------
+# Baseball exit — close all MLB positions at entry + $0.02 (break-even + margin)
+# ---------------------------------------------------------------------------
+
+_BASEBALL_SERIES = {"KXMLBGAME", "KXMLBSTGAME", "KXNCAABBGAME", "KXNCAABASEGAME"}
+
+def baseball_exit(cfg: dict | None = None) -> dict:
+    """
+    Place resting sell limits on all open baseball positions at entry_price + $0.02.
+    Cancels any existing resting sell first.
+
+    Trigger via Lambda: {"window": "carpet_bagger_baseball_exit"}
+    """
+    logger.info("=== Baseball exit: setting break-even sells ===")
+
+    api_key = os.environ.get("KALSHI_API_KEY", "")
+    rsa_key = os.environ.get("KALSHI_RSA_PRIVATE_KEY", "")
+    if not api_key or not rsa_key:
+        return {"error": "missing credentials"}
+
+    client  = KalshiClient(api_key, rsa_key)
+    records = _load_active_records()
+    baseball = [r for r in records if r.sport in _BASEBALL_SERIES and r.status == "bought"]
+
+    if not baseball:
+        logger.info("Baseball exit: no open baseball positions found")
+        return {"exited": 0}
+
+    exited = 0
+    for record in baseball:
+        exit_price = round(min(record.entry_price + 0.02, 0.99), 2)
+        exit_price = max(exit_price, 0.03)  # Kalshi floor
+
+        # Cancel existing resting sell
+        if record.sell_order_id:
+            try:
+                client.cancel_order(record.sell_order_id)
+                logger.info("Cancelled old sell order %s for %s", record.sell_order_id, record.market_ticker)
+            except Exception as exc:
+                logger.warning("Could not cancel sell order %s: %s", record.sell_order_id, exc)
+
+        # Place new resting sell at entry + $0.02
+        try:
+            sell_result   = client.place_sell(record.market_ticker, record.contract_count, yes_bid_dollars=exit_price)
+            sell_order_id = (sell_result.get("order", {}) if isinstance(sell_result, dict) else {}).get("order_id", "")
+            record.sell_order_id = sell_order_id
+            _update_record(record)
+            exited += 1
+            logger.info(
+                "Baseball exit: %s | %d contracts | resting sell @ $%.2f (entry was $%.2f)",
+                record.market_ticker, record.contract_count, exit_price, record.entry_price,
+            )
+        except Exception as exc:
+            logger.error("Baseball exit sell failed for %s: %s", record.market_ticker, exc)
+
+    return {"exited": exited, "tickers": [r.market_ticker for r in baseball]}
 
 
 # ---------------------------------------------------------------------------

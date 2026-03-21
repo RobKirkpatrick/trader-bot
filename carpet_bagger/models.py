@@ -25,7 +25,8 @@ class WatchlistRecord:
     trigger_time: str = ""          # ISO-8601 when buy order placed
     pnl: float = 0.0                # realised P&L in dollars (negative = loss)
     last_updated: str = ""          # ISO-8601 of last DynamoDB write
-    pre_game_staked: float = 0.0    # dollars spent in pre-game stake (15% tier, before tip-off)
+    pre_game_staked: float = 0.0    # dollars spent in pre-game stake (legacy field — kept for DB compat)
+    sell_order_id: str = ""         # Kalshi order ID of the resting $0.97 sell limit (cancel on stop-loss)
 
     def to_dynamodb(self) -> dict:
         return {
@@ -44,6 +45,7 @@ class WatchlistRecord:
             "pnl":             {"N": str(self.pnl)},
             "last_updated":    {"S": self.last_updated},
             "pre_game_staked": {"N": str(self.pre_game_staked)},
+            "sell_order_id":   {"S": self.sell_order_id},
         }
 
     @classmethod
@@ -64,4 +66,5 @@ class WatchlistRecord:
             pnl              = float(item.get("pnl",              {"N": "0"})["N"]),
             last_updated     = item.get("last_updated",   {"S": ""})["S"],
             pre_game_staked  = float(item.get("pre_game_staked",  {"N": "0"})["N"]),
+            sell_order_id    = item.get("sell_order_id",  {"S": ""})["S"],
         )

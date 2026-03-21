@@ -53,13 +53,21 @@ _REGION = "us-east-2"
 
 # Human-readable labels for known series
 _SPORT_LABELS = {
-    "KXNBAGAMES":    "NBA",
-    "KXNBAGAME":     "NBA",
-    "KXNHLGAME":     "NHL",
-    "KXNCAABGAME":   "NCAAB-M",
-    "KXNCAABBGAME":  "NCAAB-M",
-    "KXNCAAWBGAME":  "NCAAW",
-    "KXMLBGAME":     "MLB",
+    "KXNBAGAMES":   "NBA",
+    "KXNBAGAME":    "NBA",
+    "KXNHLGAME":    "NHL",
+    "KXNCAAMBGAME": "NCAAB-M",   # NCAA Men's Basketball (correct series)
+    "KXNCAABGAME":  "NCAAB-M",   # legacy/dead series
+    "KXNCAAWBGAME": "NCAAW",
+    "KXMLBGAME":    "MLB",
+    "KXMLBSTGAME":  "MLB-ST",    # Spring Training
+    "KXEPLGAME":    "EPL",       # English Premier League (likely ticker format)
+    "KXPLGAME":     "EPL",
+    "KXPREMGAME":   "EPL",
+    "KXUCLGAME":    "UCL",       # Champions League
+    "KXUEFAGAME":   "UEFA",
+    "KXMLS":        "MLS",
+    "KXMLSGAME":    "MLS",
 }
 
 
@@ -185,11 +193,14 @@ def run(cfg: dict | None = None) -> dict:
             open_time_str  = market.get("open_time")  or ""
 
             # Game date filter — use date embedded in ticker as the authoritative source.
-            # Kalshi's open_time reflects market creation (often the day before), not tip-off.
+            # Allow games up to MAX_CLOSE_HOURS ahead so we can pre-load March Madness
+            # games scouted on Sunday for Tuesday tip-offs, etc.
+            # The monitor will not BUY until game_date == today — scout just pre-populates.
             ticker_date = _game_date_from_ticker(ticker)
             if ticker_date is not None:
-                if ticker_date > today_et:
-                    logger.debug("Skipping %s — game date %s is tomorrow or later", ticker, ticker_date)
+                days_ahead = (ticker_date - today_et).days
+                if days_ahead > (MAX_CLOSE_HOURS // 24 + 1):
+                    logger.debug("Skipping %s — game date %s is >%dh away", ticker, ticker_date, MAX_CLOSE_HOURS)
                     continue
                 if ticker_date < today_et:
                     logger.debug("Skipping %s — game date %s was yesterday or earlier", ticker, ticker_date)

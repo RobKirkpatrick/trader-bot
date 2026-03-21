@@ -20,10 +20,12 @@ Trade strategy:
   - Duplicate guard: won't buy any ticker (or option on it) already held in open positions
 """
 
+import json
 import logging
+import os
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import boto3
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -95,10 +97,76 @@ def _options_tickers(positions: list[dict]) -> set[str]:
 # Intra-day position rotation
 # ---------------------------------------------------------------------------
 
+def _get_option_bid(sym: str, client) -> float:
+    """
+    Fetch the current bid price for an option contract by parsing the OSI symbol
+    and querying the chain. Returns 0.0 if unavailable.
+    """
+    import re as _re
+    m = _re.match(r'^([A-Z]+)(\d{6})([CP])(\d{8})$', sym.upper())
+    if not m:
+        return 0.0
+    underlying, date_str, cp, _ = m.groups()
+    try:
+        from datetime import datetime as _dt
+        expiry = _dt.strptime(date_str, "%y%m%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return 0.0
+    opt_type = "CALL" if cp == "C" else "PUT"
+    try:
+        chain = client.get_option_chain(underlying, expiry, option_type=opt_type)
+        for c in chain:
+            if c.get("optionSymbol", "").upper() == sym.upper():
+                return float(c.get("bid") or 0)
+    except Exception as exc:
+        logger.debug("Could not fetch option bid for %s: %s", sym, exc)
+    return 0.0
+
+
+def _execute_close(sym: str, qty: float, client, reason: str) -> dict:
+    """
+    Actually execute a sell order. Called from the approval handler.
+    Options use LIMIT at current bid (Public.com rejects MARKET orders on options).
+    """
+    import re
+    result = {
+        "ticker": sym, "signal": "close", "score": 0.0,
+        "action": "skipped", "reason": reason,
+        "order_id": None, "status": None, "amount": None,
+    }
+    is_options = bool(re.search(r'\d', sym))
+    try:
+        if is_options:
+            # Public.com requires LIMIT for options — always use LIMIT, floor at $0.01
+            bid = _get_option_bid(sym, client)
+            limit_price = f"{max(bid, 0.01):.2f}"
+            order = client.place_options_order(
+                option_symbol=sym, side="SELL",
+                quantity=str(int(qty)),
+                order_type="LIMIT",
+                limit_price=limit_price,
+            )
+        else:
+            order = client.place_order(
+                symbol=sym, side="SELL",
+                order_type="MARKET", quantity=str(qty),
+            )
+        result["order_id"] = order.get("orderId", "")
+        result["action"]   = "closed"
+        result["amount"]   = f"{qty:.4f} {'contracts' if is_options else 'shares'}"
+        logger.info("SELL executed: %s ×%s | reason=%s | orderId=%s",
+                    sym, qty, reason, result["order_id"])
+    except Exception as exc:
+        result["action"] = "error"
+        result["reason"] = f"{reason} — sell failed: {exc}"
+        logger.error("Sell failed for %s: %s", sym, exc)
+    return result
+
+
 def _close_intraday(position: dict, client, reason: str) -> dict:
     """
-    Close a single position mid-day.
-    Uses place_options_order for options symbols (contain digits), place_order for stocks.
+    Request approval to close a position — sends email with one-click sell link.
+    Does NOT auto-sell. Returns a 'pending_approval' result.
     """
     import re
     sym = (position.get("instrument", {}).get("symbol") or position.get("symbol") or "").upper()
@@ -107,7 +175,7 @@ def _close_intraday(position: dict, client, reason: str) -> dict:
         "ticker":   sym,
         "signal":   "close",
         "score":    0.0,
-        "action":   "skipped",
+        "action":   "pending_approval",
         "reason":   reason,
         "order_id": None,
         "status":   None,
@@ -116,34 +184,143 @@ def _close_intraday(position: dict, client, reason: str) -> dict:
     if not sym or qty is None or qty <= 0:
         result["reason"] = f"{reason} — skipped (qty={qty})"
         return result
-    is_options = bool(re.search(r'\d', sym))
+
     try:
-        if is_options:
-            order = client.place_options_order(
-                option_symbol=sym,
-                side="SELL",
-                quantity=str(int(qty)),
-                order_type="MARKET",
-            )
-        else:
-            order = client.place_order(
-                symbol=sym,
-                side="SELL",
-                order_type="MARKET",
-                quantity=str(qty),
-            )
-        result["order_id"] = order.get("orderId", "")
-        result["action"]   = "closed"
-        result["amount"]   = f"{qty:.4f} {'contracts' if is_options else 'shares'}"
-        logger.info(
-            "Intraday close: SELL %s ×%s | reason=%s | orderId=%s",
-            sym, qty, reason, result["order_id"],
-        )
+        _notify_sell_approval(sym, qty, reason)
+        logger.info("Sell approval requested: %s ×%s | reason=%s", sym, qty, reason)
     except Exception as exc:
+        logger.error("Could not send sell approval for %s: %s", sym, exc)
         result["action"] = "error"
-        result["reason"] = f"{reason} — close failed: {exc}"
-        logger.error("Intraday close failed for %s: %s", sym, exc)
+        result["reason"] = f"sell approval email failed: {exc}"
+
     return result
+
+
+def _fetch_signal_price(ticker: str, client) -> float:
+    """Fetch current price for embedding in an options approval link."""
+    try:
+        quotes = client.get_quotes([ticker])
+        for q in (quotes.get("quotes", []) if isinstance(quotes, dict) else quotes):
+            sym = (q.get("instrument", {}).get("symbol") or q.get("symbol") or "").upper()
+            if sym == ticker:
+                for field in ("last", "lastPrice", "ask", "price"):
+                    v = q.get(field)
+                    if v:
+                        return float(v)
+    except Exception as exc:
+        logger.warning("Could not fetch signal price for %s: %s", ticker, exc)
+    return 0.0
+
+
+def _notify_options_approval(
+    ticker: str,
+    opt_type: str,       # "call" or "put_spread"
+    score: float,
+    reason: str,
+    size_usd: float,
+    signal_price: float,
+) -> None:
+    """
+    Send an HMAC-signed options approval link via SNS.
+    When clicked, the approval handler re-evaluates current price and places the order.
+    Falls back to plain-text email if credentials are missing.
+    """
+    import hashlib
+    import hmac as _hmac
+    import urllib.parse
+
+    secret       = settings.SUGGESTION_TOKEN_SECRET
+    function_url = settings.LAMBDA_FUNCTION_URL
+    type_label   = "CALL" if opt_type == "call" else "PUT SPREAD"
+
+    if not secret or not function_url:
+        # Plain-text fallback
+        _publish_sns(
+            f"OPTIONS SIGNAL ({type_label}) — no approval link available\n\n"
+            f"Ticker: {ticker} | Score: {score:+.3f} | Size: ${size_usd:.2f}\n{reason}",
+            f"[TraderBot] Options signal: {type_label} {ticker}",
+        )
+        return
+
+    expires_ts = int(time.time()) + 2 * 3600   # 2-hour window
+    payload    = f"options:{opt_type}:{ticker}:{signal_price:.4f}:{size_usd:.2f}:{expires_ts}"
+    token      = _hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+    params = urllib.parse.urlencode({
+        "action":       "options",
+        "opt_type":     opt_type,
+        "ticker":       ticker,
+        "signal_price": f"{signal_price:.4f}",
+        "size":         f"{size_usd:.2f}",
+        "expires":      expires_ts,
+        "token":        token,
+    })
+    approve_url = f"{function_url.rstrip('/')}/approve?{params}"
+
+    lines = [
+        f"OPTIONS TRADE APPROVAL — {type_label} {ticker}",
+        "",
+        f"Ticker:      {ticker}",
+        f"Type:        {type_label}",
+        f"Score:       {score:+.3f}",
+        f"Size:        ${size_usd:.2f}",
+        f"Signal @:    ${signal_price:.2f}",
+        f"Reason:      {reason}",
+        "",
+        "Bot will re-evaluate price at click time and select the best available contract.",
+        "Order is blocked if price moved more than 15% against the trade.",
+        "",
+        f"Approve ➜ {approve_url}",
+        "",
+        "Link expires in 2 hours.",
+    ]
+    try:
+        _publish_sns("\n".join(lines), f"[TraderBot] Options approval: {type_label} {ticker} ({score:+.3f})")
+    except Exception as exc:
+        logger.warning("Options approval SNS failed: %s", exc)
+
+
+def _notify_sell_approval(sym: str, qty: float, reason: str) -> None:
+    """Send an HMAC-signed sell approval email. No order placed until clicked."""
+    import hashlib
+    import hmac as _hmac
+    import urllib.parse
+
+    secret       = settings.SUGGESTION_TOKEN_SECRET
+    function_url = settings.LAMBDA_FUNCTION_URL
+    if not secret or not function_url:
+        # Fall back to plain-text SNS so at least you get notified
+        logger.warning("SUGGESTION_TOKEN_SECRET or LAMBDA_FUNCTION_URL not set — sending plain-text sell alert")
+        qty_label = f"{int(qty)} contracts" if any(c.isdigit() for c in sym) else f"{qty} shares"
+        _publish_sns(
+            f"SELL NEEDED (no approval link available)\n\nSymbol: {sym}\nQty: {qty_label}\nReason: {reason}\n\n"
+            f"LAMBDA_FUNCTION_URL not configured — set it in Secrets Manager to get clickable sell links.",
+            f"[TraderBot] Sell alert (manual): {sym}",
+        )
+        return
+
+    expires_ts = int(time.time()) + 4 * 3600   # 4-hour window
+    payload    = f"sell:{sym}:{qty:.4f}:{expires_ts}"
+    token      = _hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+    params = urllib.parse.urlencode({
+        "ticker":  sym,
+        "action":  "sell",
+        "qty":     f"{qty:.4f}",
+        "expires": expires_ts,
+        "token":   token,
+    })
+    approve_url = f"{function_url.rstrip('/')}/approve?{params}"
+
+    msg = (
+        f"SELL APPROVAL NEEDED\n\n"
+        f"Symbol:   {sym}\n"
+        f"Quantity: {qty} {'contracts' if any(c.isdigit() for c in sym) else 'shares'}\n"
+        f"Reason:   {reason}\n\n"
+        f"Approve sell ➜ {approve_url}\n\n"
+        f"Link expires in 4 hours. No order placed until you click."
+    )
+    _publish_sns(msg, f"[TraderBot] Sell approval needed: {sym}")
 
 
 def _evaluate_intraday_rotation(
@@ -732,26 +909,20 @@ def _execute_signal(
         "amount":    None,
     }
 
-    # Bearish → bear put spread, but only on liquid index ETFs
+    # Bearish → skip (puts/put spreads disabled)
     if ts.signal == "bearish":
-        if ts.ticker not in _INDEX_ETF_TICKERS:
-            result["reason"] = (
-                f"Bearish on {ts.ticker} — put spreads restricted to index ETFs "
-                f"({', '.join(sorted(_INDEX_ETF_TICKERS))})"
-            )
-            return result
-        return _execute_bear_put_spread(ts, client, risk_manager, positions, position_size_usd)
+        result["reason"] = f"Bearish on {ts.ticker} — puts disabled, skipping"
+        return result
 
-    # Very strong bullish → try a call option first for leveraged upside;
-    # fall back to stock if no affordable contract exists
+    # Strong bullish — send options approval link; also buy stock as a position starter
     if ts.score >= settings.SENTIMENT_OPTIONS_CALL_THRESHOLD:
-        call_result = _execute_buy_call(ts, client, risk_manager, positions, position_size_usd)
-        if call_result["action"] == "order_placed":
-            return call_result
-        logger.info(
-            "Call not placed for %s (%s) — buying stock instead",
-            ts.ticker, call_result["reason"],
+        signal_price = _fetch_signal_price(ts.ticker, client)
+        _notify_options_approval(
+            ticker=ts.ticker, opt_type="call",
+            score=ts.score, reason="Strong bullish signal — call candidate",
+            size_usd=position_size_usd, signal_price=signal_price,
         )
+        logger.info("Options approval link sent for %s (signal @ $%.2f) — continuing to stock buy", ts.ticker, signal_price)
 
     # Risk check
     signal = TradeSignal(
@@ -1040,6 +1211,117 @@ def _generate_eod_narrative(
 # EOD email builder
 # ---------------------------------------------------------------------------
 
+def _macro_position_summary(client: PublicClient) -> str:
+    """
+    Looks up the most recent macro trade record in DynamoDB and returns a
+    formatted P&L block to append to the EOD email. Returns "" if no active
+    macro trade is found or if any step fails.
+
+    Reads MACRO_TRADE_STOCK_TICKER / MACRO_TRADE_CALL_TICKER from env (defaults
+    to XLE / OXY for backward compatibility with the existing Hormuz position).
+    """
+    stock_ticker = os.getenv("MACRO_TRADE_STOCK_TICKER", "XLE")
+    call_ticker  = os.getenv("MACRO_TRADE_CALL_TICKER",  "OXY")
+
+    try:
+        db = boto3.client("dynamodb", region_name=settings.AWS_REGION)
+        resp = db.scan(
+            TableName="trading-bot-logs",
+            FilterExpression="#s = :s1 OR #s = :s2",
+            ExpressionAttributeNames={"#s": "strategy"},
+            ExpressionAttributeValues={
+                ":s1": {"S": "macro_trade"},
+                ":s2": {"S": "hormuz_strait_closure"},
+            },
+        )
+        items = resp.get("Items", [])
+        if not items:
+            return ""
+        items.sort(key=lambda i: i.get("timestamp", {}).get("S", ""), reverse=True)
+        item = items[0]
+    except Exception as exc:
+        logger.warning("Macro position DDB lookup failed: %s", exc)
+        return ""
+
+    try:
+        positions  = json.loads(item.get("positions", {}).get("S", "{}"))
+        total_cost = float(item.get("total_deployed", {}).get("N", 0))
+        opened     = item.get("timestamp", {}).get("S", "?")[:10]
+    except Exception as exc:
+        logger.warning("Macro position parse failed: %s", exc)
+        return ""
+
+    lines = ["", "─" * 42, "MACRO POSITION:", f"  opened: {opened}  |  deployed: ${total_cost:.2f}"]
+    total_current = 0.0
+    total_basis   = 0.0
+
+    # Stock leg
+    stock_key = f"{stock_ticker.lower()}_stock"
+    stock = positions.get(stock_key, positions.get("xle_stock", {}))
+    if stock:
+        cost_basis  = float(stock.get("amount", 0))
+        entry_price = float(stock.get("price",  0))
+        current_price = 0.0
+        try:
+            quotes = client.get_quotes([stock_ticker])
+            for q in quotes.get("quotes", []):
+                val = q.get("last") or q.get("bid")
+                if val:
+                    current_price = float(val)
+        except Exception:
+            pass
+        if entry_price > 0 and current_price > 0:
+            shares        = cost_basis / entry_price
+            current_value = shares * current_price
+            unrealized    = current_value - cost_basis
+            gain_pct      = unrealized / cost_basis
+        else:
+            current_value = cost_basis
+            unrealized    = 0.0
+            gain_pct      = 0.0
+        total_current += current_value
+        total_basis   += cost_basis
+        lines.append(
+            f"  {stock_ticker} stock   entry ${entry_price:.2f} → now ${current_price:.2f}"
+            f"  {gain_pct:+.1%}  (${unrealized:+.2f})"
+        )
+
+    # Call leg
+    call_key = f"{call_ticker.lower()}_call"
+    call = positions.get(call_key, positions.get("oxy_call", {}))
+    if call:
+        strike     = float(call.get("strike", 0))
+        expiry     = call.get("expiry", "")
+        cost_basis = float(call.get("cost", 0))
+        dte        = (date.fromisoformat(expiry) - date.today()).days if expiry else None
+        current_bid = 0.0
+        try:
+            chain = client.get_option_chain(call_ticker, expiry, "CALL") if expiry else []
+            for c in chain:
+                if abs(float(c.get("strikePrice", 0)) - strike) < 0.01:
+                    current_bid = float(c.get("bid") or 0)
+                    break
+        except Exception:
+            pass
+        current_value = current_bid * 100
+        unrealized    = current_value - cost_basis
+        gain_pct      = unrealized / cost_basis if cost_basis > 0 else 0.0
+        total_current += current_value
+        total_basis   += cost_basis
+        dte_str = f"{dte} DTE" if dte is not None else ""
+        lines.append(
+            f"  {call_ticker} ${strike:.0f}C  {dte_str}  bid ${current_bid:.2f}"
+            f"  {gain_pct:+.1%}  (${unrealized:+.2f})"
+        )
+
+    if total_basis > 0:
+        total_pnl = total_current - total_basis
+        total_pct = total_pnl / total_basis
+        lines.append(f"  Total macro P&L: ${total_pnl:+.2f}  ({total_pct:+.1%})")
+
+    return "\n".join(lines)
+
+
 def _build_eod_message(
     window: str,
     position_reviews: list[dict],
@@ -1276,6 +1558,7 @@ def _execute_with_agent(
     positions: list[dict],
     account_balance: dict,
     edgar_context: dict | None = None,
+    vix_level: float | None = None,
 ) -> dict:
     """
     Agent-driven trade execution for a single signal.
@@ -1338,6 +1621,7 @@ def _execute_with_agent(
         daily_pnl=daily_pnl,
         total_exposure=total_exposure,
         edgar_context=edgar_context,
+        vix_level=vix_level,
     )
 
     decision = make_trade_decision(bundle)
@@ -1389,17 +1673,25 @@ def _execute_with_agent(
 
     order    = None
     try:
-        if c_type in ("call", "put") and c_symbol and c_symbol != ts.ticker:
-            # Options order using agent's chosen contract
-            limit_str = str(decision.get("limit_price") or 0) if decision.get("limit_price") else None
-            order = client.place_options_order(
-                option_symbol=c_symbol,
-                side="BUY",
-                quantity="1",
-                order_type="LIMIT" if limit_str else "MARKET",
-                limit_price=limit_str,
+        if c_type == "call" and c_symbol and c_symbol != ts.ticker:
+            # Send HMAC-signed approval link for calls; buy stock as position starter while waiting
+            signal_price = float(quote.get("last") or quote.get("ask") or quote.get("bid") or 0) if quote else 0.0
+            _notify_options_approval(
+                ticker=ts.ticker, opt_type="call",
+                score=ts.score, reason=reason,
+                size_usd=pos_size, signal_price=signal_price,
             )
-        else:
+            logger.info("Call approval link sent for %s (signal @ $%.2f) — buying stock instead",
+                        ts.ticker, signal_price)
+            c_type   = "stock"
+            c_symbol = ts.ticker
+        elif c_type == "put":
+            # Puts disabled — degrade to stock buy
+            logger.info("Put signal for %s suppressed (puts disabled) — buying stock instead", ts.ticker)
+            c_type   = "stock"
+            c_symbol = ts.ticker
+
+        if c_type == "stock":
             # Stock buy — use position size in dollars
             order = client.place_order(
                 symbol=ts.ticker,
@@ -1722,21 +2014,10 @@ def run_end_of_day_scan(
             "order_id":      None,
         }
         if pt_qty and pt_qty > 0:
-            try:
-                order = client.place_options_order(
-                    option_symbol=pt_sym, side="SELL",
-                    quantity=str(int(pt_qty)), order_type="MARKET",
-                )
-                pt_review["action"]   = "closed"
-                pt_review["order_id"] = order.get("orderId", "")
-                logger.info(
-                    "EOD profit-take: SELL %s ×%d | orderId=%s | reason=%s",
-                    pt_sym, int(pt_qty), pt_review["order_id"], pt["reason"],
-                )
-            except Exception as exc:
-                pt_review["action"]       = "close_failed"
-                pt_review["close_reason"] += f" — close failed: {exc}"
-                logger.error("EOD profit-take close failed for %s: %s", pt_sym, exc)
+            # Options require manual approval — send email instead of auto-selling
+            _notify_sell_approval(pt_sym, pt_qty, pt["reason"])
+            pt_review["action"] = "pending_approval"
+            logger.info("EOD profit-take: sell approval emailed for %s ×%d | reason=%s", pt_sym, int(pt_qty), pt["reason"])
         position_reviews.append(pt_review)
         profit_take_syms.add(pt_sym)
 
@@ -1799,24 +2080,24 @@ def run_end_of_day_scan(
             if qty > 0:
                 try:
                     if is_options:
-                        order = client.place_options_order(
-                            option_symbol=sym, side="SELL",
-                            quantity=str(int(qty)), order_type="MARKET",
-                        )
+                        # Options require manual approval — send email instead of auto-selling
+                        _notify_sell_approval(sym, qty, review["close_reason"])
+                        review["action"] = "pending_approval"
+                        logger.info("EOD stop-loss: sell approval emailed for %s ×%.0f", sym, qty)
                     else:
                         order = client.place_order(
                             symbol=sym, side="SELL", order_type="MARKET",
                             quantity=str(qty),
                         )
-                    order_id = order.get("orderId", "")
-                    review["action"]   = "closed"
-                    review["order_id"] = order_id
-                    if pnl_usd:
-                        risk_manager.record_loss(abs(pnl_usd))
-                    logger.info(
-                        "EOD stop-loss close: SELL %s ×%.4f | orderId=%s | P&L=%.2f",
-                        sym, qty, order_id, pnl_usd or 0,
-                    )
+                        order_id = order.get("orderId", "")
+                        review["action"]   = "closed"
+                        review["order_id"] = order_id
+                        if pnl_usd:
+                            risk_manager.record_loss(abs(pnl_usd))
+                        logger.info(
+                            "EOD stop-loss close: SELL %s ×%.4f | orderId=%s | P&L=%.2f",
+                            sym, qty, order_id, pnl_usd or 0,
+                        )
                 except Exception as exc:
                     review["action"]       = "close_failed"
                     review["close_reason"] += f" — order failed: {exc}"
@@ -1833,6 +2114,10 @@ def run_end_of_day_scan(
     narrative = _generate_eod_narrative(position_reviews, buying_power, log_text)
 
     msg = _build_eod_message(window, position_reviews, buying_power, narrative)
+    macro_block = _macro_position_summary(client)
+    if macro_block:
+        msg += macro_block
+
     if n_profit_takes and n_stop_losses:
         subject = f"[TraderBot] {n_profit_takes} profit-take + {n_stop_losses} stop-loss — {window}"
     elif n_profit_takes:
@@ -1893,6 +2178,24 @@ def _run_scan(
     except Exception as exc:
         logger.warning("EDGAR scan failed (non-fatal): %s", exc)
 
+    # Fetch VIX level — used to calibrate position sizing and contract selection
+    vix_level: float | None = None
+    try:
+        from data.public_options_provider import PublicOptionsProvider
+        vix_quote = PublicOptionsProvider(client).get_quote("VIX")
+        raw = vix_quote.get("last") or vix_quote.get("ask") or vix_quote.get("bid")
+        if raw:
+            vix_level = float(raw)
+            regime = (
+                "calm"      if vix_level < 18 else
+                "elevated"  if vix_level < 25 else
+                "high_fear" if vix_level < 35 else
+                "panic"
+            )
+            logger.info("VIX level: %.2f (%s)", vix_level, regime)
+    except Exception as exc:
+        logger.warning("Could not fetch VIX level (non-fatal): %s", exc)
+
     # Pull macro summary for the email
     macro_summary = ""
     try:
@@ -1951,7 +2254,7 @@ def _run_scan(
             edgar_ctx = edgar_signals.get(ts.ticker)
             if edgar_ctx:
                 edgar_stats["sent_to_claude"] += 1
-            tr = _execute_with_agent(ts, client, risk_manager, positions, account_balance, edgar_context=edgar_ctx)
+            tr = _execute_with_agent(ts, client, risk_manager, positions, account_balance, edgar_context=edgar_ctx, vix_level=vix_level)
             trade_results.append(tr)
             # Re-fetch positions after each fill so duplicate guard stays current
             if tr["action"] == "order_placed":
@@ -1980,7 +2283,7 @@ def _run_scan(
             edgar_stats["sent_to_claude"] += 1
             tr = _execute_with_agent(
                 ts_edgar, client, risk_manager, positions, account_balance,
-                edgar_context=sig,
+                edgar_context=sig, vix_level=vix_level,
             )
             trade_results.append(tr)
             if tr["action"] == "order_placed":

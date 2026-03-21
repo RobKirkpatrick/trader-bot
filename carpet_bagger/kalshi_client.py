@@ -8,8 +8,9 @@ Auth: RSA-SHA256 request signing.
     KALSHI-ACCESS-SIGNATURE — base64(RSA_SHA256(message))
     KALSHI-ACCESS-TIMESTAMP — milliseconds since epoch
 
-Prices: Kalshi returns prices in cents (integers).
-  This client normalises all prices to decimal dollars on return.
+Prices: Kalshi API v2 returns prices as string dollars in *_dollars fields
+  (e.g. "yes_ask_dollars": "0.55"). Legacy integer-cent fields (yes_ask, yes_bid,
+  last_price) are now null/0. parse_market_price() handles both formats.
   Order methods accept dollar prices and convert internally.
 
 Error handling:
@@ -29,6 +30,26 @@ import requests
 logger = logging.getLogger(__name__)
 
 _BASE = "https://api.elections.kalshi.com/trade-api/v2"
+
+
+def parse_market_price(market: dict, field: str) -> float:
+    """
+    Return a market price as a float in dollars (0.0–1.0).
+
+    Handles both API response formats:
+      - New (v2): "yes_ask_dollars": "0.55"  (string dollars)
+      - Legacy:   "yes_ask": 55              (integer cents, now often null/0)
+    """
+    dollars_field = field + "_dollars"
+    if dollars_field in market:
+        try:
+            val = float(market[dollars_field] or 0)
+            if val > 0:
+                return val
+        except (ValueError, TypeError):
+            pass
+    cents = market.get(field) or 0
+    return cents / 100.0
 
 
 class KalshiClient:
@@ -176,12 +197,25 @@ class KalshiClient:
         """
         # Head-to-head team sports only (two competitors, win/loss outcome).
         # Excludes golf (PGA, LPGA), racing (NASCAR, F1, INDYCAR) — multi-competitor markets.
-        _SPORT_PREFIXES = ("NBA", "WNBA", "NHL", "MLB", "NCAAB", "NCAAW", "NCAAF", "NFL", "MLS", "IIHF")
+        _SPORT_PREFIXES = (
+            "NBA", "WNBA", "NHL", "MLB", "NCAAB", "NCAAW", "NCAAF", "NFL", "MLS", "IIHF",
+            # Soccer — international and domestic leagues
+            "EPL", "PL", "PREM",        # English Premier League
+            "UCL", "UEFA",              # Champions League / Europa League
+            "LALIGA", "LIGA",           # Spanish La Liga
+            "BUND", "BUNDESLIGA",       # German Bundesliga
+            "SERIEA", "SERIE",          # Italian Serie A
+            "LIGUE",                    # French Ligue 1
+            "SOCCER", "SOC",            # catch-all for any Kalshi soccer series
+        )
         # Series to exclude — non-competitive or multi-competitor (not two-team head-to-head).
         _EXCLUDED_SERIES = {
-            "KXMLBSTGAME",  # MLB Spring Training — non-competitive lineups
             "KXPGAH2H",     # PGA golf H2H — multi-player tournament, not a two-team game
             "KXLPGAH2H",    # LPGA golf H2H
+            "KXMLBGAME",    # MLB — blocked (3hr games, capital lockup)
+            "KXMLBSTGAME",  # MLB Spring Training — blocked
+            "KXNCAABBGAME", # NCAA Baseball — blocked
+            "KXNCAABASEGAME",
         }
 
         try:
@@ -208,7 +242,7 @@ class KalshiClient:
 
         logger.info("Discovered %d additional sports game series candidates: %s", len(result), result)
         # Cap to avoid excessive API calls and 429s during the scout run
-        return result[:10]
+        return result[:20]
 
     def get_market(self, ticker: str) -> dict:
         """Fetch a single market by ticker. Returns market dict."""
@@ -218,8 +252,7 @@ class KalshiClient:
     def get_yes_ask(self, ticker: str) -> float:
         """Return current yes_ask price in dollars (0.0–1.0)."""
         market = self.get_market(ticker)
-        cents  = market.get("yes_ask", 0)
-        return cents / 100.0
+        return parse_market_price(market, "yes_ask")
 
     # ------------------------------------------------------------------
     # Orders
@@ -254,6 +287,12 @@ class KalshiClient:
         )
         result = self._request("POST", "/portfolio/orders", json=body)
         logger.info("Kalshi BUY result: %s", result)
+        return result
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel an open order by ID (e.g. a resting sell limit)."""
+        result = self._request("DELETE", f"/portfolio/orders/{order_id}")
+        logger.info("Kalshi CANCEL order %s: %s", order_id, result)
         return result
 
     def place_sell(self, ticker: str, contract_count: int, yes_bid_dollars: float = 0.01) -> dict:

@@ -17,9 +17,14 @@ import hashlib
 import hmac
 import logging
 import time
+from datetime import datetime, timezone
 
 from config.settings import settings
 from broker.public_client import PublicClient
+
+_OPTIONS_DTE_MIN     = 14
+_OPTIONS_DTE_MAX     = 45
+_OPTIONS_DRIFT_BLOCK = 0.15   # block if price moved >15% against the trade
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +32,21 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Token validation
 # ---------------------------------------------------------------------------
+
+def _verify_sell_token(ticker: str, qty: float, expires_ts: int, token: str) -> bool:
+    """Return True if the sell HMAC token is valid and not expired."""
+    if not settings.SUGGESTION_TOKEN_SECRET:
+        return False
+    if time.time() > expires_ts:
+        return False
+    payload  = f"sell:{ticker}:{qty:.4f}:{expires_ts}"
+    expected = hmac.new(
+        settings.SUGGESTION_TOKEN_SECRET.encode(),
+        payload.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, token)
+
 
 def _verify_token(ticker: str, dollars: float, expires_ts: int, token: str) -> bool:
     """Return True if the HMAC token is valid and not expired."""
@@ -275,6 +295,335 @@ def _handle_batch_approval(params: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Sell approval handler
+# ---------------------------------------------------------------------------
+
+def _html_sell_success(ticker: str, qty: float, order_id: str) -> str:
+    import re
+    qty_label = f"{int(qty)} contract{'s' if int(qty) != 1 else ''}" if re.search(r'\d', ticker) else f"{qty} shares"
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sell Approved — TraderBot</title>
+  <style>{_HTML_STYLE}</style>
+</head>
+<body>
+  <h2 class="ok">&#10003; Sell Approved</h2>
+  <div class="detail">
+    <strong>Sold {qty_label} of {ticker}</strong><br>
+    Order ID: <code>{order_id}</code>
+  </div>
+  <p>Market sell order placed. Fills immediately if the market is open.</p>
+  <p class="footer">TraderBot</p>
+</body>
+</html>"""
+
+
+def _handle_sell_approval(params: dict) -> dict:
+    """Execute a sell when Rob clicks the approval link from email."""
+    import re
+    ticker  = (params.get("ticker") or "").upper().strip()
+    qty_str = params.get("qty", "")
+    expires_str = params.get("expires", "")
+    token   = params.get("token", "")
+
+    if not all([ticker, qty_str, expires_str, token]):
+        return _html_response(_html_error("Invalid or incomplete sell approval link."), status=400)
+
+    try:
+        qty        = float(qty_str)
+        expires_ts = int(expires_str)
+    except (ValueError, TypeError):
+        return _html_response(_html_error("Malformed sell approval link."), status=400)
+
+    if not _verify_sell_token(ticker, qty, expires_ts, token):
+        reason = (
+            "This sell approval link has expired."
+            if time.time() > expires_ts
+            else "Invalid sell approval link."
+        )
+        return _html_response(_html_error(reason), status=403)
+
+    logger.info("Sell approved — placing SELL %s ×%s", ticker, qty)
+    try:
+        from scheduler.jobs import _execute_close
+        client = PublicClient()
+        result = _execute_close(ticker, qty, client, reason="manual approval")
+        order_id = result.get("order_id") or "unknown"
+        if result.get("action") == "error":
+            raise RuntimeError(result["reason"])
+    except Exception as exc:
+        logger.error("Sell approval execution failed for %s: %s", ticker, exc)
+        return _html_response(_html_error(f"Sell order failed: {exc}"), status=500)
+
+    _send_confirmation_sns(
+        [f"SOLD {qty} of {ticker}", f"Order ID: {order_id}", "Manual approval via email link."],
+        f"[TraderBot] Confirmed SELL: {ticker}",
+    )
+    return _html_response(_html_sell_success(ticker, qty, order_id))
+
+
+# ---------------------------------------------------------------------------
+# Options approval handler
+# ---------------------------------------------------------------------------
+
+def _verify_options_token(opt_type: str, ticker: str, signal_price: float,
+                           size_usd: float, expires_ts: int, token: str) -> bool:
+    if not settings.SUGGESTION_TOKEN_SECRET:
+        return False
+    if time.time() > expires_ts:
+        return False
+    payload  = f"options:{opt_type}:{ticker}:{signal_price:.4f}:{size_usd:.2f}:{expires_ts}"
+    expected = hmac.new(
+        settings.SUGGESTION_TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, token)
+
+
+def _html_options_success(ticker: str, opt_type: str, contract_info: str,
+                           order_id: str, signal_price: float,
+                           current_price: float, drift_pct: float) -> str:
+    type_label  = "Call" if opt_type == "call" else "Put Spread"
+    price_delta = f"${signal_price:.2f} → ${current_price:.2f} ({drift_pct:+.1%})"
+    warn_row    = ""
+    if abs(drift_pct) >= 0.05:
+        warn_row = f"<tr><td>⚠ Price drift</td><td>{price_delta}</td></tr>"
+    else:
+        warn_row = f"<tr><td>Signal → Now</td><td>{price_delta}</td></tr>"
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Options Trade Placed — TraderBot</title>
+  <style>{_HTML_STYLE}</style>
+</head>
+<body>
+  <h2 class="ok">&#10003; {type_label} Order Placed</h2>
+  <div class="detail">
+    <table>
+      <tr><td>Ticker</td><td><strong>{ticker}</strong></td></tr>
+      <tr><td>Contract</td><td>{contract_info}</td></tr>
+      {warn_row}
+      <tr><td>Order ID</td><td><code>{order_id}</code></td></tr>
+    </table>
+  </div>
+  <p>Limit order submitted. Check Public.com for fill status.</p>
+  <p class="footer">TraderBot</p>
+</body>
+</html>"""
+
+
+def _html_options_stale(ticker: str, opt_type: str, signal_price: float,
+                         current_price: float, drift_pct: float) -> str:
+    direction  = "fell" if drift_pct < 0 else "rose"
+    type_label = "call" if opt_type == "call" else "put spread"
+    reason = (
+        f"{ticker} {direction} {abs(drift_pct):.1%} since the signal fired "
+        f"(${signal_price:.2f} → ${current_price:.2f}). "
+        f"A {type_label} no longer has a favorable risk/reward at this price. "
+        f"No order was placed."
+    )
+    return _html_error(reason)
+
+
+def _handle_options_approval(params: dict) -> dict:
+    """Re-evaluate price drift and place an options order when the approval link is clicked."""
+    opt_type    = (params.get("opt_type") or "").lower().strip()
+    ticker      = (params.get("ticker") or "").upper().strip()
+    expires_str = params.get("expires", "")
+    token       = params.get("token", "")
+    signal_price_str = params.get("signal_price", "0")
+    size_str    = params.get("size", "0")
+
+    if not all([opt_type, ticker, expires_str, token]):
+        return _html_response(_html_error("Invalid or incomplete options approval link."), status=400)
+
+    if opt_type not in ("call", "put_spread"):
+        return _html_response(_html_error(f"Unknown option type: {opt_type}"), status=400)
+
+    try:
+        expires_ts   = int(expires_str)
+        signal_price = float(signal_price_str)
+        size_usd     = float(size_str)
+    except (ValueError, TypeError):
+        return _html_response(_html_error("Malformed options approval link."), status=400)
+
+    if not _verify_options_token(opt_type, ticker, signal_price, size_usd, expires_ts, token):
+        reason = (
+            "This options approval link has expired."
+            if time.time() > expires_ts
+            else "Invalid options approval link."
+        )
+        return _html_response(_html_error(reason), status=403)
+
+    # Re-evaluate: fetch current price and check drift
+    current_price = _fetch_current_price(ticker)
+    if current_price <= 0:
+        current_price = signal_price   # fallback — proceed without drift check
+
+    drift_pct = (current_price - signal_price) / signal_price if signal_price > 0 else 0.0
+    adverse   = (drift_pct < 0) if opt_type == "call" else (drift_pct > 0)
+    if adverse and abs(drift_pct) > _OPTIONS_DRIFT_BLOCK:
+        logger.info("Options approval blocked — %s drift=%.1f%% exceeds threshold", ticker, drift_pct * 100)
+        return _html_response(
+            _html_options_stale(ticker, opt_type, signal_price, current_price, drift_pct)
+        )
+
+    client = PublicClient()
+
+    # ---- CALL ----
+    if opt_type == "call":
+        expirations = client.get_option_expirations(ticker)
+        if not expirations:
+            return _html_response(_html_error(f"No option expirations available for {ticker}."))
+
+        today      = datetime.now(timezone.utc).date()
+        target_dte = (_OPTIONS_DTE_MIN + _OPTIONS_DTE_MAX) / 2
+        candidates = []
+        for exp_str in expirations:
+            try:
+                exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                dte = (exp_date - today).days
+                if _OPTIONS_DTE_MIN <= dte <= _OPTIONS_DTE_MAX:
+                    candidates.append((abs(dte - target_dte), exp_str))
+            except ValueError:
+                continue
+
+        if not candidates:
+            return _html_response(
+                _html_error(f"No expiration in {_OPTIONS_DTE_MIN}–{_OPTIONS_DTE_MAX} DTE window for {ticker}.")
+            )
+        candidates.sort()
+        expiration = candidates[0][1]
+
+        chain = client.get_option_chain(ticker, expiration, option_type="CALL")
+        if not chain:
+            return _html_response(_html_error(f"Empty call chain for {ticker} exp {expiration}."))
+
+        chain.sort(key=lambda c: abs(float(c.get("strikePrice", 0)) - current_price))
+
+        chosen = None
+        chosen_mid = 0.0
+        for contract in chain[:10]:
+            strike = float(contract.get("strikePrice", 0))
+            if strike < current_price * 0.99:
+                continue
+            bid = float(contract.get("bid") or 0)
+            ask = float(contract.get("ask") or 0)
+            if bid <= 0 or ask <= 0:
+                continue
+            mid = (bid + ask) / 2
+            if mid * 100 <= size_usd:
+                chosen     = contract
+                chosen_mid = mid
+                break
+
+        if not chosen:
+            return _html_response(
+                _html_error(f"No affordable call for {ticker} within ${size_usd:.0f} budget at current prices.")
+            )
+
+        opt_sym    = chosen.get("optionSymbol", "")
+        strike_str = chosen.get("strikePrice", "")
+        try:
+            order    = client.place_options_order(
+                option_symbol=opt_sym, side="BUY", quantity="1",
+                order_type="LIMIT", limit_price=f"{chosen_mid:.2f}",
+            )
+            order_id = order.get("orderId", "unknown")
+        except Exception as exc:
+            logger.error("Options call order failed for %s: %s", ticker, exc)
+            return _html_response(_html_error(f"Order placement failed: {exc}"), status=500)
+
+        contract_info = f"1 CALL · {ticker} ${strike_str} exp {expiration} @ ${chosen_mid:.2f}/share"
+        logger.info("Options approval placed CALL %s @ $%.2f | orderId=%s", opt_sym, chosen_mid, order_id)
+        _send_confirmation_sns(
+            [f"CALL placed: {ticker} ${strike_str} exp {expiration}",
+             f"Limit @ ${chosen_mid:.2f}/share | Order: {order_id}",
+             f"Signal @ ${signal_price:.2f} → Current ${current_price:.2f} ({drift_pct:+.1%})"],
+            f"[TraderBot] Options placed: CALL {ticker}",
+        )
+        return _html_response(
+            _html_options_success(ticker, opt_type, contract_info, order_id,
+                                  signal_price, current_price, drift_pct)
+        )
+
+    # ---- PUT SPREAD ----
+    expirations = client.get_option_expirations(ticker)
+    if not expirations:
+        return _html_response(_html_error(f"No option expirations available for {ticker}."))
+
+    today      = datetime.now(timezone.utc).date()
+    target_dte = (_OPTIONS_DTE_MIN + _OPTIONS_DTE_MAX) / 2
+    candidates = []
+    for exp_str in expirations:
+        try:
+            exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+            dte = (exp_date - today).days
+            if _OPTIONS_DTE_MIN <= dte <= _OPTIONS_DTE_MAX:
+                candidates.append((abs(dte - target_dte), exp_str))
+        except ValueError:
+            continue
+
+    if not candidates:
+        return _html_response(
+            _html_error(f"No expiration in {_OPTIONS_DTE_MIN}–{_OPTIONS_DTE_MAX} DTE window for {ticker}.")
+        )
+    candidates.sort()
+    expiration   = candidates[0][1]
+    long_strike  = int(round(current_price * 0.995))
+    short_strike = int(round(current_price * 0.975))
+
+    legs = [
+        PublicClient.make_option_leg(
+            base_symbol=ticker, option_type="PUT",
+            strike=f"{long_strike}.00", expiration=expiration,
+            side="BUY", open_close="OPEN", ratio=1,
+        ),
+        PublicClient.make_option_leg(
+            base_symbol=ticker, option_type="PUT",
+            strike=f"{short_strike}.00", expiration=expiration,
+            side="SELL", open_close="OPEN", ratio=1,
+        ),
+    ]
+
+    try:
+        pf        = client.preflight_multi_leg(legs=legs, quantity="1",
+                                               order_type="LIMIT", limit_price="1.00")
+        net_debit = float(pf.get("estimatedCost") or pf.get("buyingPowerRequirement") or 1.0)
+    except Exception:
+        net_debit = 1.0
+
+    contracts = max(1, int(size_usd / max(net_debit * 100, 1.0)))
+    try:
+        order    = client.place_multi_leg(legs=legs, quantity=str(contracts),
+                                          order_type="LIMIT", limit_price=f"{net_debit:.2f}")
+        order_id = order.get("orderId", "unknown")
+    except Exception as exc:
+        logger.error("Put spread approval failed for %s: %s", ticker, exc)
+        return _html_response(_html_error(f"Order placement failed: {exc}"), status=500)
+
+    contract_info = (
+        f"{contracts}× PUT SPREAD · {ticker} ${long_strike}/${short_strike} "
+        f"exp {expiration} @ ${net_debit:.2f} net debit"
+    )
+    logger.info("Options approval placed PUT SPREAD %s | orderId=%s", ticker, order_id)
+    _send_confirmation_sns(
+        [f"PUT SPREAD placed: {ticker} ${long_strike}/${short_strike} exp {expiration}",
+         f"{contracts} contract(s) @ ${net_debit:.2f} debit | Order: {order_id}",
+         f"Signal @ ${signal_price:.2f} → Current ${current_price:.2f} ({drift_pct:+.1%})"],
+        f"[TraderBot] Options placed: PUT SPREAD {ticker}",
+    )
+    return _html_response(
+        _html_options_success(ticker, opt_type, contract_info, order_id,
+                              signal_price, current_price, drift_pct)
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main handler
 # ---------------------------------------------------------------------------
 
@@ -290,6 +639,14 @@ def handle_approval(event: dict) -> dict:
     # Route batch approvals
     if "batch" in params:
         return _handle_batch_approval(params)
+
+    # Route sell approvals
+    if params.get("action") == "sell":
+        return _handle_sell_approval(params)
+
+    # Route options approvals
+    if params.get("action") == "options":
+        return _handle_options_approval(params)
 
     ticker      = (params.get("ticker") or "").upper().strip()
     dollars_str = params.get("dollars", "")

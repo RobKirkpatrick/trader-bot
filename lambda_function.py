@@ -152,16 +152,21 @@ def handler(event: dict, context) -> dict:  # noqa: ANN001
         from api.approval_handler import handle_approval  # noqa: PLC0415
         return handle_approval(event)
 
-    # 3. Import modules AFTER secrets are in env (Settings reads os.environ)
+    # 3. Kill switch — set TRADING_PAUSED=true in Secrets Manager to halt all trades immediately
+    if os.environ.get("TRADING_PAUSED", "false").lower() == "true":
+        logger.warning("TRADING_PAUSED=true — skipping all scan windows. No orders will be placed.")
+        return {"statusCode": 200, "body": '{"status": "paused"}'}
+
+    # 4. Import modules AFTER secrets are in env (Settings reads os.environ)
     from scheduler.jobs import (  # noqa: PLC0415
         run_pre_market_scan, run_market_open_scan, run_midday_scan, run_end_of_day_scan,
     )
 
-    # 4. Determine which window to run
+    # 5. Determine which window to run
     window = _detect_window(event)
     logger.info("Running window: %s", window)
 
-    # 5. Execute scan
+    # 6. Execute scan
     try:
         if window == "pre_market":
             result = run_pre_market_scan()
@@ -187,6 +192,9 @@ def handler(event: dict, context) -> dict:  # noqa: ANN001
         elif window == "carpet_bagger_force_sell":
             from carpet_bagger.monitor import force_sell as cb_force_sell  # noqa: PLC0415
             result = cb_force_sell(cfg=event)
+        elif window == "carpet_bagger_baseball_exit":
+            from carpet_bagger.monitor import baseball_exit as cb_baseball_exit  # noqa: PLC0415
+            result = cb_baseball_exit(cfg=event)
         elif window == "edgar_scan":
             from scheduler.jobs import run_edgar_scan  # noqa: PLC0415
             result = run_edgar_scan()

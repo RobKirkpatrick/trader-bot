@@ -562,7 +562,9 @@ class PublicClient:
             side.upper(), option_symbol, order_type.upper(), quantity,
         )
         resp = requests.post(url, headers=self._headers(), json=body, timeout=10)
-        resp.raise_for_status()
+        if not resp.ok:
+            logger.error("Options order failed %d: %s | body=%s", resp.status_code, url, resp.text[:500])
+            resp.raise_for_status()
         result = resp.json()
         logger.info("Options order submitted: %s", result)
         return result

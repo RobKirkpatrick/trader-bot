@@ -38,8 +38,24 @@ class Settings:
     # (including rejections) so you can see why trades are/aren't being placed.
     TRADE_DEBUG: bool = os.getenv("TRADE_DEBUG", "false").lower() == "true"
 
-    # Risk parameters
-    MAX_POSITION_PCT: float = 0.15      # 15% of account per trade
+    # ---------------------------------------------------------------------------
+    # User risk profile — configure these in .env or Secrets Manager
+    # ---------------------------------------------------------------------------
+    # conservative: 5% max position, no options, cautious VIX handling
+    # moderate:     10-15% max position, calls only (default)
+    # aggressive:   20% max position, calls enabled, higher concentration
+    RISK_TOLERANCE: str = os.getenv("RISK_TOLERANCE", "moderate").lower()
+
+    OPTIONS_CALLS_ENABLED: bool = os.getenv("OPTIONS_CALLS_ENABLED", "true").lower() == "true"
+    CARPET_BAGGER_ENABLED: bool = os.getenv("CARPET_BAGGER_ENABLED", "true").lower() == "true"
+    CARPET_BAGGER_MAX_POSITION: float = float(os.getenv("CARPET_BAGGER_MAX_POSITION", "1.00"))
+
+    # Risk parameters (overridden by RISK_TOLERANCE if set)
+    MAX_POSITION_PCT: float = {
+        "conservative": 0.05,
+        "moderate":     0.15,
+        "aggressive":   0.20,
+    }.get(os.getenv("RISK_TOLERANCE", "moderate").lower(), 0.15)
     STOP_LOSS_PCT: float = 0.07         # 7% stop loss
     DAILY_LOSS_LIMIT_PCT: float = 0.10  # 10% daily loss limit
 
@@ -84,6 +100,8 @@ class Settings:
         "META", "AMZN", "GOOGL",
         # Broad market ETFs (put spreads on bearish macro signals)
         "SPY", "QQQ", "IWM",
+        # Energy / Hormuz trade — oil supply disruption plays
+        "XLE", "OXY", "BNO",  # BNO = Brent crude ETF, most direct Iran/Hormuz proxy
         # Financials — $20–$70, options ~$0.30–$1.00/contract ($30–$100)
         "BAC", "C", "INTC",
         # AI / data plays — $20–$35, options ~$0.50–$1.00 ($50–$100)
