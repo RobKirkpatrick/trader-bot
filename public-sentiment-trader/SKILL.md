@@ -1,16 +1,17 @@
 ---
 name: public-sentiment-trader
 description: >
-  AI-powered sentiment trading bot for Public.com that blends six market
-  signals (price action, news, social sentiment, macro, earnings, SEC filings)
-  to identify trade opportunities and execute orders automatically. Use when
-  you want to: check your Public.com portfolio and P&L, fetch live stock or
-  options quotes, run a full sentiment scan across your watchlist, place or
-  review orders, analyze position risk, get evening trade suggestions, monitor
-  open options for profit-taking, scan SEC 8-K filings for catalysts, or
-  understand why the bot made a specific trade decision. Also includes
-  Carpet Bagger — an autonomous Kalshi sports prediction market scalper that
-  buys strong in-game favorites and exits at a momentum target.
+  AI-powered trading bot for Public.com that monitors your watchlist, scores
+  tickers across six sentiment signals, and trades on your behalf. Use when
+  you want to: check portfolio positions and P&L, run a sentiment scan, fetch
+  real-time quotes, automatically place stock orders when conviction is high,
+  place call or put options after one-click HMAC-signed email approval, receive
+  Claude-curated evening trade suggestions with an approve-all link, or verify
+  risk limits before market open. Signals blend price action, Finnhub news,
+  Claude macro analysis, MarketAux entity sentiment, Polygon keywords, and
+  Reddit/WSB pulse. A companion Kalshi sports strategy trades prediction markets
+  to offset compute costs. VIX-aware sizing, PDT guard, daily loss limits, and
+  a kill switch protect capital.
 ---
 
 # Public Sentiment Trader

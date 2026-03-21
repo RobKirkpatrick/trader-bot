@@ -156,6 +156,17 @@ python public-sentiment-trader/scripts/place_order.py --symbol AAPL --side buy -
 
 ---
 
+## Install as a Claude Skill
+
+1. Open **Claude Code** → **Settings** → **Skills** → **Add Skill**
+2. Paste the repo URL: `https://github.com/RobKirkpatrick/trader-bot`
+3. Set the skill root to the `public-sentiment-trader/` subdirectory
+4. Try a prompt like: `"Show me my current positions and P&L"`
+
+Claude reads `SKILL.md` and routes your request to the right script automatically — no flag-hunting required.
+
+---
+
 ## Configuration
 
 All config lives in `.env` (local) or AWS Secrets Manager (Lambda). No hardcoded values.
