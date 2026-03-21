@@ -1,7 +1,7 @@
 """
 Lambda Function URL handler for one-click trade approvals.
 
-Invoked when Rob clicks an approval link from the evening suggestion email.
+Invoked when the user clicks an approval link from the evening suggestion email.
 The URL format is:
     https://{function-url}/approve?ticker=AAPL&dollars=3.00&expires=1234567890&token=abc...
 
@@ -10,7 +10,7 @@ Security model:
   - Expiry is enforced via unix timestamp in the URL (no database required)
   - SECRET is stored in AWS Secrets Manager and injected via SUGGESTION_TOKEN_SECRET env var
 
-Response: HTML page (rendered in the browser when Rob clicks the link).
+Response: HTML page (rendered in the browser when the user clicks the link).
 """
 
 import hashlib

@@ -2,7 +2,7 @@
 test_scan.py — Run a live sentiment scan locally without placing orders.
 
 Usage:
-  cd /Users/rob/Desktop/Workspace/Python/Venmo
+  cd /path/to/trader-bot
   python3 test_scan.py
 """
 

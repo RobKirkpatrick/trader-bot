@@ -85,6 +85,11 @@ class Settings:
     # Weekly performance benchmark — HYSA rate to compare against
     HYSA_APY: float = 0.056   # 5.6% annual — update if your HYSA rate changes
 
+    # Sell authorization — when True, intraday rotation closes and EOD stop-losses are
+    # NOT auto-executed. Instead an email is sent describing what would have been sold.
+    # Set to False (default) to allow the bot to sell automatically.
+    REQUIRE_SELL_APPROVAL: bool = os.getenv("REQUIRE_SELL_APPROVAL", "false").lower() == "true"
+
     # Off-hours suggestion engine
     SUGGESTION_TOKEN_SECRET: str = os.getenv("SUGGESTION_TOKEN_SECRET", "")
     SUGGESTION_EXPIRY_HOURS: int = 20

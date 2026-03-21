@@ -21,7 +21,7 @@ DEPLOY_DIR="$(pwd)"
 BUILD_DIR="/tmp/trader-bot-build"
 PACKAGE_ZIP="/tmp/trader-bot.zip"
 # S3 bucket for deployment uploads (avoids Lambda 22MB direct-upload limit)
-DEPLOY_BUCKET="trading-bot-deploy-130854680873"
+DEPLOY_BUCKET="trading-bot-deploy-${ACCOUNT_ID}"  # set ACCOUNT_ID env var or replace with your S3 bucket name
 
 echo "=== Trading Bot Deploy ==="
 echo "Function : ${FUNCTION_NAME}"

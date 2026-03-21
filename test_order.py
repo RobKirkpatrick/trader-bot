@@ -2,7 +2,7 @@
 test_order.py — Manual test script for a live $5 notional buy of CAT.
 
 Run locally:
-  cd /Users/rob/Desktop/Workspace/Python/Venmo
+  cd /path/to/trader-bot
   pip3 install -r requirements.txt
   python3 test_order.py
 

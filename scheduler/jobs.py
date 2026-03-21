@@ -2078,13 +2078,24 @@ def run_end_of_day_scan(
                 f"Stop-loss hit ({pnl_pct:+.1%} ≤ -{stop_loss_threshold:.0%})"
             )
             if qty > 0:
-                try:
-                    if is_options:
-                        # Options require manual approval — send email instead of auto-selling
+                if settings.REQUIRE_SELL_APPROVAL:
+                    review["action"] = "approval_needed"
+                    logger.info(
+                        "Sell approval required for %s — stop-loss not auto-executed (%s)",
+                        sym, review["close_reason"],
+                    )
+                elif is_options:
+                    # Options always require manual approval — send email instead of auto-selling
+                    try:
                         _notify_sell_approval(sym, qty, review["close_reason"])
                         review["action"] = "pending_approval"
                         logger.info("EOD stop-loss: sell approval emailed for %s ×%.0f", sym, qty)
-                    else:
+                    except Exception as exc:
+                        logger.error("Could not send sell approval for %s: %s", sym, exc)
+                        review["action"] = "close_failed"
+                        review["close_reason"] += f" — approval email failed: {exc}"
+                else:
+                    try:
                         order = client.place_order(
                             symbol=sym, side="SELL", order_type="MARKET",
                             quantity=str(qty),
@@ -2098,10 +2109,10 @@ def run_end_of_day_scan(
                             "EOD stop-loss close: SELL %s ×%.4f | orderId=%s | P&L=%.2f",
                             sym, qty, order_id, pnl_usd or 0,
                         )
-                except Exception as exc:
-                    review["action"]       = "close_failed"
-                    review["close_reason"] += f" — order failed: {exc}"
-                    logger.error("EOD close failed for %s: %s", sym, exc)
+                    except Exception as exc:
+                        review["action"]       = "close_failed"
+                        review["close_reason"] += f" — order failed: {exc}"
+                        logger.error("EOD close failed for %s: %s", sym, exc)
 
         position_reviews.append(review)
 

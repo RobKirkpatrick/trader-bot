@@ -20,22 +20,21 @@ from datetime import datetime, timezone, date, timedelta
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# USER INPUTS  ← edit these
+# USER INPUTS  ← edit these before running
 # ---------------------------------------------------------------------------
-TRACKING_START_DATE    = "2026-03-04"   # date you first funded the accounts
-PUBLIC_INITIAL_DEPOSIT = 3958.95        # Public.com: $1158.95 starting + $2800 added
-AWS_MONTHLY_COST       = 5.00           # estimated monthly AWS charges (Lambda, CW, SM, etc.)
-CLAUDE_MONTHLY_COST    = 20.00          # Claude Pro $20/mo (from 3/2/26) + ~$5 API usage
-OTHER_MONTHLY_COST     = 0.00           # any other recurring costs
+TRACKING_START_DATE    = "YYYY-MM-DD"   # set to the date you first funded the accounts
+PUBLIC_INITIAL_DEPOSIT = 0.00           # set to your total Public.com deposits (cash moved in, not current value)
+AWS_MONTHLY_COST       = 5.00           # estimated monthly AWS charges (Lambda, CW, SM, etc.) — adjust to your usage
+CLAUDE_MONTHLY_COST    = 20.00          # Claude Pro subscription + API usage — adjust to your plan
+OTHER_MONTHLY_COST     = 0.00           # any other recurring costs (data feeds, broker fees, etc.)
 
-# Kalshi deposit/withdrawal ledger — add a row each time you move money
-# Format: (date, amount)  positive = deposit, negative = withdrawal
+# Kalshi deposit/withdrawal ledger — add a row each time you move money in or out
+# Format: ("YYYY-MM-DD", amount)  positive = deposit, negative = withdrawal
+# Example:
+#   ("2026-01-01", +100.00),   # initial deposit
+#   ("2026-01-15", -50.00),    # withdrew winnings
 KALSHI_TRANSACTIONS = [
-    ("2026-03-04", +0.27),    # starting balance
-    ("2026-03-04", +50.00),   # added $50
-    ("2026-03-06", -35.43),   # withdrew winnings
-    ("2026-03-07", -75.38),   # withdrew winnings
-    ("2026-03-11", +25.00),   # added $25
+    # ("YYYY-MM-DD", +0.00),   # add your transactions here
 ]
 # Net cash into Kalshi (deposits minus withdrawals) — used for P&L calculation
 # Negative = you've pulled out more than you put in (a good thing)
