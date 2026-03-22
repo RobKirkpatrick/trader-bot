@@ -111,12 +111,20 @@ Claude reads `SKILL.md` and invokes the matching script with the right arguments
 
 ### Interactive (Claude Skill)
 
+> Requires Python 3.10+ and VS Code with the Claude Code extension installed.
+
 ```bash
 git clone https://github.com/RobKirkpatrick/trader-bot
 cd trader-bot
+code .                                          # open in VS Code
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # fill in your keys
+cp .env.example .env                            # fill in your keys
+```
+
+**Verify your setup (no API keys needed):**
+```bash
+python -c "import requests, anthropic, boto3, dotenv; print('✅ All dependencies installed')"
 ```
 
 Then use Claude Code with the `public-sentiment-trader/` skill directory.
@@ -158,12 +166,23 @@ python public-sentiment-trader/scripts/place_order.py --symbol AAPL --side buy -
 
 ## Install as a Claude Skill
 
-1. Open **Claude Code** → **Settings** → **Skills** → **Add Skill**
-2. Paste the repo URL: `https://github.com/RobKirkpatrick/trader-bot`
-3. Set the skill root to the `public-sentiment-trader/` subdirectory
-4. Try a prompt like: `"Show me my current positions and P&L"`
+After cloning (step above), add the skill to Claude Code by pointing it at the local skill directory:
 
-Claude reads `SKILL.md` and routes your request to the right script automatically — no flag-hunting required.
+1. Open **Claude Code** in VS Code (Cmd+Shift+P → `Claude: Focus on Chat`)
+2. Go to **Settings** → **Skills** → **Add Skill**
+3. Paste the local path to the skill directory:
+```
+   /path/to/trader-bot/public-sentiment-trader
+```
+   *(replace `/path/to/` with wherever you cloned the repo)*
+4. Claude will read `SKILL.md` automatically — try:
+```
+   "Show me my current positions and P&L"
+   "Run a sentiment scan on the watchlist"
+   "Check my risk limits before market open"
+```
+
+No flags, no scripts — just plain English.
 
 ---
 
