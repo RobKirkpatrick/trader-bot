@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sentinel — Development Mode</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0d0d0d;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+
+    .wordmark {
+      font-size: 0.75rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: #555;
+      margin-bottom: 2.5rem;
+    }
+
+    .card {
+      background: #141414;
+      border: 1px solid #222;
+      border-radius: 16px;
+      padding: 2.5rem 3rem;
+      max-width: 560px;
+      width: 100%;
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 0.4rem;
+    }
+
+    .subtitle {
+      font-size: 0.8rem;
+      color: #444;
+      margin-bottom: 2.5rem;
+    }
+
+    /* Big toggle */
+    .toggle-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1.2rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .status-label {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      transition: color 0.25s;
+    }
+    .status-label.paused  { color: #ff4d4d; }
+    .status-label.active  { color: #3ddc84; }
+
+    .toggle-btn {
+      width: 88px;
+      height: 48px;
+      border-radius: 24px;
+      border: none;
+      cursor: pointer;
+      position: relative;
+      transition: background 0.25s;
+      flex-shrink: 0;
+    }
+    .toggle-btn.paused { background: #ff4d4d; }
+    .toggle-btn.active { background: #3ddc84; }
+
+    .toggle-btn::after {
+      content: '';
+      position: absolute;
+      top: 4px;
+      width: 40px;
+      height: 40px;
+      background: #fff;
+      border-radius: 50%;
+      transition: left 0.25s;
+    }
+    .toggle-btn.active::after  { left: 44px; }
+    .toggle-btn.paused::after  { left: 4px; }
+
+    .status-desc {
+      font-size: 0.82rem;
+      color: #555;
+      max-width: 340px;
+      line-height: 1.5;
+    }
+
+    /* Command area */
+    .cmd-section {
+      text-align: left;
+    }
+
+    .cmd-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: #555;
+      margin-bottom: 0.5rem;
+    }
+
+    .cmd-box {
+      background: #0a0a0a;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 1rem 1.2rem;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.72rem;
+      color: #b0c4de;
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.6;
+      position: relative;
+    }
+
+    .copy-btn {
+      margin-top: 0.75rem;
+      width: 100%;
+      padding: 0.65rem;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #ccc;
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .copy-btn:hover { background: #2a2a2a; color: #fff; }
+    .copy-btn.copied { background: #1a3a1a; border-color: #3ddc84; color: #3ddc84; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #1e1e1e;
+      margin: 2rem 0;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .footer-links a {
+      font-size: 0.75rem;
+      color: #444;
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .footer-links a:hover { color: #888; }
+
+    .config-note {
+      font-size: 0.72rem;
+      color: #383838;
+      margin-top: 1.2rem;
+      text-align: center;
+    }
+    .config-note a { color: #444; text-decoration: none; }
+    .config-note a:hover { color: #888; }
+  </style>
+</head>
+<body>
+
+  <div class="wordmark">Sentinel</div>
+
+  <div class="card">
+    <h1>Development Mode</h1>
+    <p class="subtitle">Pause all trading instantly — no redeploy needed.</p>
+
+    <div class="toggle-wrap">
+      <div class="status-label active" id="statusLabel">TRADING ACTIVE</div>
+      <button class="toggle-btn active" id="toggleBtn" onclick="toggle()" title="Toggle development mode"></button>
+      <p class="status-desc" id="statusDesc">
+        The bot will execute trades on the next Lambda invocation.
+      </p>
+    </div>
+
+    <div class="cmd-section">
+      <div class="cmd-label">Run this command in your terminal</div>
+      <div class="cmd-box" id="cmdBox"></div>
+      <button class="copy-btn" id="copyBtn" onclick="copyCmd()">Copy command</button>
+    </div>
+
+    <hr class="divider">
+
+    <div class="footer-links">
+      <a href="#" id="smLink" target="_blank">Open Secrets Manager</a>
+      <a href="index.html">Setup wizard</a>
+    </div>
+
+    <p class="config-note" id="configNote"></p>
+  </div>
+
+  <script>
+    // ---------------------------------------------------------------------------
+    // State — read AWS config from wizard localStorage
+    // ---------------------------------------------------------------------------
+    const STORAGE_KEY = 'sentinel_setup_v2';
+
+    function getConfig() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+      } catch { return {}; }
+    }
+
+    let cfg = getConfig();
+    let region     = cfg['AWS_REGION']     || 'us-east-2';
+    let secretName = cfg['AWS_SECRET_NAME'] || 'trading-bot/secrets';
+
+    // Current paused state (default: assume active — we can't read SM from the browser)
+    let paused = false;
+
+    // ---------------------------------------------------------------------------
+    // Command generation
+    // ---------------------------------------------------------------------------
+    function buildCmd(pause) {
+      const val = pause ? 'true' : 'false';
+      return (
+        `python3 -c "\n` +
+        `import boto3, json\n` +
+        `sm = boto3.client('secretsmanager', region_name='${region}')\n` +
+        `s = json.loads(sm.get_secret_value(SecretId='${secretName}')['SecretString'])\n` +
+        `s['TRADING_PAUSED'] = '${val}'\n` +
+        `sm.put_secret_value(SecretId='${secretName}', SecretString=json.dumps(s))\n` +
+        `print('Done — TRADING_PAUSED=${val}')\n` +
+        `"`
+      );
+    }
+
+    // ---------------------------------------------------------------------------
+    // UI update
+    // ---------------------------------------------------------------------------
+    function render() {
+      const label   = document.getElementById('statusLabel');
+      const btn     = document.getElementById('toggleBtn');
+      const desc    = document.getElementById('statusDesc');
+      const cmdBox  = document.getElementById('cmdBox');
+      const copyBtn = document.getElementById('copyBtn');
+
+      if (paused) {
+        label.textContent = 'TRADING PAUSED';
+        label.className   = 'status-label paused';
+        btn.className     = 'toggle-btn paused';
+        desc.textContent  = 'No orders will be placed on the next Lambda invocation. Run the command below to apply.';
+        cmdBox.textContent = buildCmd(true);
+        copyBtn.textContent = 'Copy pause command';
+      } else {
+        label.textContent = 'TRADING ACTIVE';
+        label.className   = 'status-label active';
+        btn.className     = 'toggle-btn active';
+        desc.textContent  = 'The bot will execute trades on the next Lambda invocation.';
+        cmdBox.textContent = buildCmd(false);
+        copyBtn.textContent = 'Copy resume command';
+      }
+
+      copyBtn.classList.remove('copied');
+    }
+
+    function toggle() {
+      paused = !paused;
+      render();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Copy
+    // ---------------------------------------------------------------------------
+    function copyCmd() {
+      const text = document.getElementById('cmdBox').textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.textContent = paused ? 'Copy pause command' : 'Copy resume command';
+        }, 2000);
+      });
+    }
+
+    // ---------------------------------------------------------------------------
+    // Secrets Manager console link (region-aware)
+    // ---------------------------------------------------------------------------
+    function updateSmLink() {
+      const encoded = encodeURIComponent(secretName);
+      document.getElementById('smLink').href =
+        `https://${region}.console.aws.amazon.com/secretsmanager/secret?name=${encoded}&region=${region}`;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Config note — show if wizard hasn't been run
+    // ---------------------------------------------------------------------------
+    function updateConfigNote() {
+      const note = document.getElementById('configNote');
+      if (!cfg['AWS_REGION'] || !cfg['AWS_SECRET_NAME']) {
+        note.innerHTML =
+          `Using defaults (region: <code>${region}</code>, secret: <code>${secretName}</code>). ` +
+          `<a href="index.html">Run the setup wizard</a> to auto-fill your values.`;
+      } else {
+        note.innerHTML =
+          `Using region <code>${region}</code> &middot; secret <code>${secretName}</code>`;
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Init
+    // ---------------------------------------------------------------------------
+    updateSmLink();
+    updateConfigNote();
+    render();
+  </script>
+</body>
+</html>
