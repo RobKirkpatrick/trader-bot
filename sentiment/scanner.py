@@ -117,6 +117,8 @@ class SentimentScanner:
         """
         scan_start = time.time()
         tickers = [t.upper() for t in (tickers or settings.WATCHLIST)]
+        if settings.BLACKLIST:
+            tickers = [t for t in tickers if t not in settings.BLACKLIST]
 
         # 1. Price signals — Public.com real-time quotes (1 API call, always available)
         price_scores = self._get_price_scores(tickers)

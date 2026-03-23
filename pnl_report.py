@@ -223,8 +223,8 @@ def fetch_kalshi_state() -> dict:
     print("Fetching Kalshi account state...", flush=True)
     try:
         from carpet_bagger.kalshi_client import KalshiClient
-        kalshi_key = os.getenv("KALSHI_API_KEY") or getattr(settings, "KALSHI_API_KEY", "")
-        kalshi_pem = os.getenv("KALSHI_RSA_PRIVATE_KEY") or getattr(settings, "KALSHI_RSA_PRIVATE_KEY", "")
+        kalshi_key = settings.KALSHI_API_KEY
+        kalshi_pem = settings.KALSHI_RSA_PRIVATE_KEY
         if not kalshi_key or not kalshi_pem:
             raise ValueError("KALSHI_API_KEY / KALSHI_RSA_PRIVATE_KEY not in environment")
         client = KalshiClient(api_key=kalshi_key, rsa_private_key_pem=kalshi_pem)

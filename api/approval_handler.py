@@ -346,9 +346,31 @@ def _handle_sell_approval(params: dict) -> dict:
         )
         return _html_response(_html_error(reason), status=403)
 
+    # PDT guard: block same-day sells to prevent Pattern Day Trader violations
+    from scheduler.jobs import _execute_close, _get_today_buy_symbols
+    today_buys = _get_today_buy_symbols(0.0)
+    if today_buys is None:
+        return _html_response(
+            _html_error(
+                "Sell blocked: trade history is temporarily unavailable (DynamoDB unreachable). "
+                "This is a safety measure to prevent Pattern Day Trader rule violations. "
+                "Try again in a few minutes or sell manually in your brokerage app."
+            ),
+            status=503,
+        )
+    if ticker in today_buys:
+        return _html_response(
+            _html_error(
+                f"Sell blocked for {ticker}: this position was opened today. "
+                "Selling a position on the same day it was bought counts as a round-trip day trade. "
+                "Accounts under $25,000 are limited to 3 round-trips in any rolling 5-day window "
+                "before a 90-day trading freeze is imposed. This sell will be available tomorrow."
+            ),
+            status=403,
+        )
+
     logger.info("Sell approved — placing SELL %s ×%s", ticker, qty)
     try:
-        from scheduler.jobs import _execute_close
         client = PublicClient()
         result = _execute_close(ticker, qty, client, reason="manual approval")
         order_id = result.get("order_id") or "unknown"

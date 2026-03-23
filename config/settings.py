@@ -29,6 +29,10 @@ class Settings:
     # MarketAux (free tier: 100 req/day — entity-level news sentiment)
     MARKETAUX_API_KEY: str = os.getenv("MARKETAUX_API_KEY", "")
 
+    # Kalshi (Carpet Bagger — prediction market trading)
+    KALSHI_API_KEY:         str = os.getenv("KALSHI_API_KEY", "")
+    KALSHI_RSA_PRIVATE_KEY: str = os.getenv("KALSHI_RSA_PRIVATE_KEY", "")
+
     # AWS
     AWS_REGION: str = os.getenv("AWS_REGION", "us-east-2")
     AWS_SECRET_NAME: str = os.getenv("AWS_SECRET_NAME", "trading-bot/secrets")
@@ -96,10 +100,14 @@ class Settings:
     SUGGESTION_DOLLARS_DEFAULT: float = 3.0
     LAMBDA_FUNCTION_URL: str = os.getenv("LAMBDA_FUNCTION_URL", "")
 
-    # Watchlist — tickers to scan
+    # Macro position tickers — read from env so EOD email can track any trade
+    MACRO_TRADE_STOCK_TICKER: str = os.getenv("MACRO_TRADE_STOCK_TICKER", "XLE")
+    MACRO_TRADE_CALL_TICKER:  str = os.getenv("MACRO_TRADE_CALL_TICKER",  "OXY")
+
+    # Watchlist — comma-separated WATCHLIST env var overrides the hardcoded default.
     # Mix of high-conviction mega-caps + options-affordable mid-priced names ($10–$50)
-    # where 1 ATM contract fits within the ~$150 position budget
-    WATCHLIST: list[str] = [
+    # where 1 ATM contract fits within the ~$150 position budget.
+    _WATCHLIST_DEFAULT: list[str] = [
         # Mega-cap tech (high sentiment signal, stock buys)
         "AAPL", "MSFT", "TSLA", "NVDA", "AMD",
         "META", "AMZN", "GOOGL",
@@ -121,6 +129,16 @@ class Settings:
         # SPX/NDX/VIX options are European-style, no early assignment risk
         "SPX", "NDX", "VIX", "CBTX",
     ]
+    _watchlist_env = os.getenv("WATCHLIST", "")
+    WATCHLIST: list[str] = (
+        [t.strip().upper() for t in _watchlist_env.split(",") if t.strip()]
+        if _watchlist_env else _WATCHLIST_DEFAULT
+    )
+
+    # Blacklist — comma-separated BLACKLIST env var. Tickers listed here are
+    # permanently excluded from sentiment scanning and all trade execution.
+    _blacklist_env = os.getenv("BLACKLIST", "")
+    BLACKLIST: set[str] = {t.strip().upper() for t in _blacklist_env.split(",") if t.strip()}
 
 
 settings = Settings()

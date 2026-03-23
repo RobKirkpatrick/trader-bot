@@ -299,7 +299,7 @@ def _notify_sell_approval(sym: str, qty: float, reason: str) -> None:
         )
         return
 
-    expires_ts = int(time.time()) + 4 * 3600   # 4-hour window
+    expires_ts = int(time.time()) + 20 * 3600   # 20-hour window
     payload    = f"sell:{sym}:{qty:.4f}:{expires_ts}"
     token      = _hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
@@ -318,7 +318,7 @@ def _notify_sell_approval(sym: str, qty: float, reason: str) -> None:
         f"Quantity: {qty} {'contracts' if any(c.isdigit() for c in sym) else 'shares'}\n"
         f"Reason:   {reason}\n\n"
         f"Approve sell ➜ {approve_url}\n\n"
-        f"Link expires in 4 hours. No order placed until you click."
+        f"Link expires in 20 hours. No order placed until you click."
     )
     _publish_sns(msg, f"[TraderBot] Sell approval needed: {sym}")
 
@@ -1220,8 +1220,8 @@ def _macro_position_summary(client: PublicClient) -> str:
     Reads MACRO_TRADE_STOCK_TICKER / MACRO_TRADE_CALL_TICKER from env (defaults
     to XLE / OXY for backward compatibility with the existing Hormuz position).
     """
-    stock_ticker = os.getenv("MACRO_TRADE_STOCK_TICKER", "XLE")
-    call_ticker  = os.getenv("MACRO_TRADE_CALL_TICKER",  "OXY")
+    stock_ticker = settings.MACRO_TRADE_STOCK_TICKER
+    call_ticker  = settings.MACRO_TRADE_CALL_TICKER
 
     try:
         db = boto3.client("dynamodb", region_name=settings.AWS_REGION)
@@ -1819,7 +1819,8 @@ def run_edgar_scan() -> dict:
         logger.warning("EDGAR scan: account fetch failed: %s", exc)
 
     try:
-        edgar_signals = _edgar_scan(settings.WATCHLIST)
+        _watchlist = [t for t in settings.WATCHLIST if t not in settings.BLACKLIST]
+        edgar_signals = _edgar_scan(_watchlist)
     except Exception as exc:
         logger.error("EDGAR scan: edgar_monitor failed: %s", exc)
         return {"window": "edgar_scan", "filings_found": 0, "acted_on": 0, "error": str(exc)}
@@ -2079,7 +2080,8 @@ def run_end_of_day_scan(
             )
             if qty > 0:
                 if settings.REQUIRE_SELL_APPROVAL:
-                    review["action"] = "approval_needed"
+                    _notify_sell_approval(sym, qty, review["close_reason"])
+                    review["action"] = "pending_approval"
                     logger.info(
                         "Sell approval required for %s — stop-loss not auto-executed (%s)",
                         sym, review["close_reason"],
@@ -2176,10 +2178,11 @@ def _run_scan(
 
     # EDGAR 8-K scan — runs alongside regular sentiment scan
     edgar_signals: dict[str, dict] = {}
-    edgar_stats = {"scanned": len(settings.WATCHLIST), "high_impact": 0, "sent_to_claude": 0}
+    _edgar_watchlist = [t for t in settings.WATCHLIST if t not in settings.BLACKLIST]
+    edgar_stats = {"scanned": len(_edgar_watchlist), "high_impact": 0, "sent_to_claude": 0}
     try:
         from sentiment.edgar_monitor import scan_watchlist as _edgar_scan
-        edgar_signals                = _edgar_scan(settings.WATCHLIST)
+        edgar_signals                = _edgar_scan(_edgar_watchlist)
         edgar_stats["high_impact"]   = sum(1 for s in edgar_signals.values() if s["priority"])
         if edgar_signals:
             logger.info(
