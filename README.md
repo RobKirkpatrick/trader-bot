@@ -1,4 +1,4 @@
-# Public Sentiment Trader
+# Sentinel
 
 *Six signal sources. One score. Your call.*
 
@@ -12,13 +12,13 @@ Markets don't lack for signal — they have too much of it, and most of it is wr
 
 Financial news is dramatic by design — headlines move prices, not fundamentals. r/WallStreetBets is brilliant but sarcastic, gambling-inclined, and deliberately ironic; reading it literally is a trap. r/stocks skews cautious and slow, often flagging opportunities weeks after the move. SEC 8-K filings contain real alpha but require legal interpretation. Price action alone lags. Combine all of them and you have a firehose of conflicting, biased signals arriving faster than any part-time investor can synthesize.
 
-Public Sentiment Trader was built for the investor who has a job, a family, and a life — but still wants to act on the market intelligently, not reactively.
+Sentinel was built for the investor who has a job, a family, and a life — but still wants to act on the market intelligently, not reactively.
 
 Claude reads every signal simultaneously, weights them by reliability, and normalizes dynamically when a source is unavailable. What comes out isn't noise — it's a single score from −1.0 to +1.0 per ticker, with a plain-English rationale and a recommended action calibrated to your risk tolerance. The throttle is yours.
 
 At the conservative end: a nightly email digest with three annotated picks, nothing executing without your click. At the aggressive end: a fully autonomous bot scanning four times daily, executing at market open, flagging high-conviction options plays for one-click approval, and running EOD stop-loss reviews. Most people land somewhere in between — and the bot adapts to wherever you set it.
 
-The Kalshi side strategy covers compute costs. A small float in Kalshi sports prediction markets generates enough to run the Sentiment Trader without touching your investment portfolio. The bot pays for itself.
+The Kalshi side strategy covers compute costs. A small float in Kalshi sports prediction markets generates enough to run Sentinel without touching your investment portfolio. The bot pays for itself.
 
 Public.com is what makes all of this viable. Commission-free order execution, a real-time quotes and portfolio API, and options chain data with Greeks — all without a Bloomberg terminal. For a retail investor building a serious tool, Public's API is the rare combination of professional-grade market access and genuine accessibility that makes this kind of integration possible.
 
@@ -120,6 +120,15 @@ Claude reads `SKILL.md` and invokes the matching script with the right arguments
 ---
 
 ## Quick Start
+
+The fastest path is the **[Sentinel Setup Wizard](docs/index.html)** — open it in any browser to get guided through every API key and config option. Key features:
+
+- **Import .env** — paste an existing `.env` file to pre-fill all fields instantly
+- **Live completion counter** — header shows "X/9 keys set" so you always know what's missing
+- **localStorage persistence** — values auto-save as you type and restore on refresh
+- **AWS Secrets Manager link** — the approval token step links directly to Secrets Manager in whichever region you selected
+
+Once your `.env` is ready, proceed with the steps below.
 
 ### Interactive (Claude Skill)
 
@@ -273,7 +282,7 @@ Takes effect on the next Lambda invocation. No redeploy needed.
 
 ## Carpet Bagger (Kalshi Sports)
 
-An optional strategy that trades Kalshi prediction markets on in-game sports outcomes. **The goal is to generate enough to cover the bot's compute costs** (AWS Lambda, Claude API) — so the Sentiment Trader effectively runs for free. The Kalshi float is kept small ($50–$100) and profits are withdrawn regularly, leaving only a working float at risk.
+An optional strategy that trades Kalshi prediction markets on in-game sports outcomes. **The goal is to generate enough to cover the bot's compute costs** (AWS Lambda, Claude API) — so Sentinel effectively runs for free. The Kalshi float is kept small ($50–$100) and profits are withdrawn regularly, leaving only a working float at risk.
 
 **Thesis**: When a pre-game favorite is winning mid-game, Kalshi markets briefly underreact — implied probability spikes above fair value for a short window. The bot buys at 80–90% implied probability, targeting a take-profit exit at 90–93% (sport-dependent), with a stop-loss if the odds deteriorate.
 
