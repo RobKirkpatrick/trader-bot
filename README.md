@@ -8,7 +8,7 @@ Built on the [Public.com API](https://public.com) and deployed to AWS Lambda. Ru
 
 ## Investment Thesis
 
-Markets overreact to short-term sentiment. A ticker that drops 3% on mildly negative news — while earnings are clean, analyst sentiment is neutral, and WSB is quiet — is more likely to mean-revert than continue falling. But identifying that moment requires synthesizing signals that are each, on their own, unreliable.
+Markets don't lack for signal — they have too much of it, and most of it is wrong in predictable ways. Financial news is designed to create urgency. Social sentiment skews toward whoever is loudest that week. Price action lags. No single source tells the full story, but together, properly weighted, they do. The problem is synthesizing all of them before the opportunity closes.
 
 Financial news is dramatic by design — headlines move prices, not fundamentals. r/WallStreetBets is brilliant but sarcastic, gambling-inclined, and deliberately ironic; reading it literally is a trap. r/stocks skews cautious and slow, often flagging opportunities weeks after the move. SEC 8-K filings contain real alpha but require legal interpretation. Price action alone lags. Combine all of them and you have a firehose of conflicting, biased signals arriving faster than any part-time investor can synthesize.
 
@@ -339,3 +339,13 @@ deploy.sh                       Build + deploy Lambda + upsert EventBridge sched
 | [Kalshi](https://kalshi.com) | Sports prediction markets | Required for Carpet Bagger |
 
 ApeWisdom (WSB pulse) requires no API key.
+
+---
+
+## Disclaimer
+
+This project is for educational and informational purposes only. It is not financial advice, investment advice, trading advice, or any other sort of advice. Nothing in this repository should be construed as a recommendation to buy, sell, or hold any security or financial instrument.
+
+Automated trading involves substantial risk of loss. Past performance of any strategy or signal is not indicative of future results. You are solely responsible for any trades placed through your brokerage account. Always understand what code is doing before running it against a live account.
+
+The Kalshi integration involves prediction markets, which carry their own distinct risks. Never risk money you cannot afford to lose.
