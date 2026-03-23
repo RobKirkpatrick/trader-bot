@@ -1,6 +1,6 @@
 # Public Sentiment Trader
 
-**An AI-powered trading bot that blends six market signals, asks Claude to decide, and lets you approve with one click.**
+*Six signal sources. One score. Your call.*
 
 Built on the [Public.com API](https://public.com) and deployed to AWS Lambda. Runs autonomously on a schedule or interactively as a [Claude Agent Skill](public-sentiment-trader/SKILL.md).
 
@@ -8,7 +8,19 @@ Built on the [Public.com API](https://public.com) and deployed to AWS Lambda. Ru
 
 ## Investment Thesis
 
-Markets overreact to short-term sentiment. A ticker that drops 3% on mildly negative news — while earnings are clean, analyst sentiment is neutral, and WSB is quiet — is more likely to mean-revert than continue falling. Conversely, a ticker with improving price action, a fresh earnings beat, and unusual social mention velocity often has further to run.
+Markets overreact to short-term sentiment. A ticker that drops 3% on mildly negative news — while earnings are clean, analyst sentiment is neutral, and WSB is quiet — is more likely to mean-revert than continue falling. But identifying that moment requires synthesizing signals that are each, on their own, unreliable.
+
+Financial news is dramatic by design — headlines move prices, not fundamentals. r/WallStreetBets is brilliant but sarcastic, gambling-inclined, and deliberately ironic; reading it literally is a trap. r/stocks skews cautious and slow, often flagging opportunities weeks after the move. SEC 8-K filings contain real alpha but require legal interpretation. Price action alone lags. Combine all of them and you have a firehose of conflicting, biased signals arriving faster than any part-time investor can synthesize.
+
+Public Sentiment Trader was built for the investor who has a job, a family, and a life — but still wants to act on the market intelligently, not reactively.
+
+Claude reads every signal simultaneously, weights them by reliability, and normalizes dynamically when a source is unavailable. What comes out isn't noise — it's a single score from −1.0 to +1.0 per ticker, with a plain-English rationale and a recommended action calibrated to your risk tolerance. The throttle is yours.
+
+At the conservative end: a nightly email digest with three annotated picks, nothing executing without your click. At the aggressive end: a fully autonomous bot scanning four times daily, executing at market open, flagging high-conviction options plays for one-click approval, and running EOD stop-loss reviews. Most people land somewhere in between — and the bot adapts to wherever you set it.
+
+The Kalshi side strategy covers compute costs. A small float in Kalshi sports prediction markets generates enough to run the Sentiment Trader without touching your investment portfolio. The bot pays for itself.
+
+Public.com is what makes all of this viable. Commission-free order execution, a real-time quotes and portfolio API, and options chain data with Greeks — all without a Bloomberg terminal. For a retail investor building a serious tool, Public's API is the rare combination of professional-grade market access and genuine accessibility that makes this kind of integration possible.
 
 The bot operationalizes this thesis:
 1. **Score** every ticker in the watchlist using six independent sentiment sources
