@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sentinel — Settings</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #f0f2f5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 0 64px;
+      color: #0f172a;
+    }
+
+    /* ── Page nav ── */
+    .page-nav {
+      width: 100%;
+      background: #0f172a;
+      display: flex;
+      justify-content: center;
+      padding: 0 16px;
+      margin-bottom: 28px;
+    }
+    .page-nav-inner {
+      display: flex;
+      gap: 0;
+      max-width: 660px;
+      width: 100%;
+    }
+    .page-nav a {
+      padding: 13px 18px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #64748b;
+      text-decoration: none;
+      letter-spacing: 0.03em;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .page-nav a:hover { color: #cbd5e1; }
+    .page-nav a.active { color: #22c55e; border-bottom-color: #22c55e; }
+
+    /* ── Header ── */
+    .page-header {
+      width: 100%;
+      max-width: 660px;
+      padding: 0 16px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .page-logo {
+      font-size: 1.4rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: #0f172a;
+    }
+    .page-logo span { color: #22c55e; }
+    .keys-meta {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .keys-meta strong { color: #22c55e; }
+
+    /* ── Import bar ── */
+    .import-bar {
+      width: 100%;
+      max-width: 660px;
+      margin: 0 16px 20px;
+      background: #fff;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 14px 18px;
+    }
+    .import-bar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+    }
+    .import-bar-header span {
+      font-size: 0.84rem;
+      font-weight: 700;
+      color: #1e293b;
+    }
+    .import-bar-header .chevron {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      transition: transform 0.2s;
+    }
+    .import-bar-header .chevron.open { transform: rotate(180deg); }
+    .import-body { display: none; margin-top: 14px; }
+    .import-body.open { display: block; }
+    .import-body textarea {
+      width: 100%;
+      height: 120px;
+      padding: 10px 12px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 0.72rem;
+      font-family: 'Courier New', monospace;
+      color: #0f172a;
+      background: #f8fafc;
+      resize: vertical;
+      outline: none;
+    }
+    .import-body textarea:focus { border-color: #22c55e; }
+    .import-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+    /* ── Save bar (sticky) ── */
+    .save-bar {
+      width: 100%;
+      max-width: 660px;
+      padding: 0 16px;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .btn-save {
+      padding: 11px 26px;
+      background: #22c55e;
+      border: none;
+      border-radius: 10px;
+      font-size: 0.875rem;
+      font-weight: 700;
+      color: #fff;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s;
+    }
+    .btn-save:hover { background: #16a34a; }
+    .btn-sm {
+      padding: 11px 14px;
+      background: #fff;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #475569;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s;
+      font-family: inherit;
+    }
+    .btn-sm:hover { background: #f1f5f9; border-color: #cbd5e1; }
+    .save-status {
+      font-size: 0.8rem;
+      color: #22c55e;
+      font-weight: 600;
+      display: none;
+    }
+    .save-status.show { display: block; }
+
+    /* ── Section cards ── */
+    .section {
+      width: 100%;
+      max-width: 660px;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.05);
+      margin: 0 16px 16px;
+      overflow: hidden;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 24px;
+      cursor: pointer;
+      user-select: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.2s;
+    }
+    .section-header:hover { background: #f8fafc; }
+    .section-header.open { border-bottom-color: #f1f5f9; }
+
+    .section-title-wrap { display: flex; align-items: center; gap: 10px; }
+    .section-icon { font-size: 1rem; }
+    .section-title {
+      font-size: 0.9rem;
+      font-weight: 800;
+      color: #0f172a;
+      letter-spacing: -0.01em;
+    }
+    .section-subtitle {
+      font-size: 0.72rem;
+      color: #94a3b8;
+      font-weight: 500;
+      margin-top: 1px;
+    }
+    .section-chevron {
+      font-size: 0.7rem;
+      color: #94a3b8;
+      transition: transform 0.2s;
+    }
+    .section-chevron.open { transform: rotate(180deg); }
+
+    .section-body { display: none; padding: 24px; }
+    .section-body.open { display: block; }
+
+    /* ── Fields ── */
+    .field { margin-bottom: 20px; }
+    .field:last-child { margin-bottom: 0; }
+    .field label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.84rem;
+      font-weight: 700;
+      color: #1e293b;
+      margin-bottom: 7px;
+    }
+    .field-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #e2e8f0;
+      flex-shrink: 0;
+      transition: background 0.2s;
+    }
+    .field-dot.filled { background: #22c55e; }
+    .badge {
+      display: inline-block;
+      font-size: 0.62rem;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 99px;
+      margin-left: 2px;
+      vertical-align: middle;
+      letter-spacing: 0.04em;
+    }
+    .badge-required { background: #fee2e2; color: #dc2626; }
+    .badge-optional { background: #f1f5f9; color: #64748b; }
+
+    .field input[type="text"],
+    .field input[type="password"],
+    .field input[type="number"],
+    .field select,
+    .field textarea {
+      width: 100%;
+      padding: 11px 14px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 0.875rem;
+      font-family: inherit;
+      color: #0f172a;
+      background: #f8fafc;
+      outline: none;
+      transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+    }
+    .field input:focus, .field select:focus, .field textarea:focus {
+      border-color: #22c55e;
+      box-shadow: 0 0 0 3px rgba(34,197,94,0.13);
+      background: #fff;
+    }
+    .field textarea {
+      resize: vertical;
+      min-height: 90px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.78rem;
+      line-height: 1.6;
+    }
+    .field .hint {
+      font-size: 0.78rem;
+      color: #94a3b8;
+      margin-top: 7px;
+      line-height: 1.55;
+    }
+    .field .hint a { color: #0ea5e9; text-decoration: none; }
+    .field .hint a:hover { text-decoration: underline; }
+
+    .input-row { display: flex; gap: 8px; }
+    .input-row input { flex: 1; }
+
+    .field-btn {
+      padding: 11px 14px;
+      background: #f1f5f9;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #475569;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s;
+      font-family: inherit;
+    }
+    .field-btn:hover { background: #e2e8f0; }
+
+    /* ── Toggles ── */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      background: #f8fafc;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 10px;
+      margin-bottom: 10px;
+      gap: 16px;
+    }
+    .toggle-row:last-child { margin-bottom: 0; }
+    .toggle-info { flex: 1; }
+    .toggle-info strong { font-size: 0.875rem; display: block; margin-bottom: 3px; }
+    .toggle-info span { font-size: 0.78rem; color: #64748b; line-height: 1.5; }
+    .toggle { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-slider {
+      position: absolute; inset: 0;
+      background: #cbd5e1;
+      border-radius: 24px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 18px; height: 18px;
+      left: 3px; top: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    }
+    .toggle input:checked + .toggle-slider { background: #22c55e; }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(20px); }
+
+    /* ── Chip UI ── */
+    .chip-wrap {
+      border: 1.5px solid #e2e8f0;
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 10px 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 48px;
+      cursor: text;
+      transition: border-color 0.18s;
+    }
+    .chip-wrap:focus-within { border-color: #22c55e; background: #fff; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: #0f172a;
+      color: #fff;
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+    .chip.block-chip { background: #dc2626; }
+    .chip-x {
+      cursor: pointer; opacity: 0.6;
+      font-size: 0.85rem; line-height: 1; padding: 0 1px;
+    }
+    .chip-x:hover { opacity: 1; }
+    .chip-input-el {
+      border: none; outline: none; background: transparent;
+      font-size: 0.84rem; font-family: inherit; color: #0f172a;
+      min-width: 80px; flex: 1; padding: 3px 4px;
+    }
+
+    /* ── .env preview ── */
+    .env-preview {
+      background: #0f172a;
+      color: #a3e635;
+      border-radius: 10px;
+      padding: 18px 20px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.7rem;
+      line-height: 1.85;
+      max-height: 260px;
+      overflow-y: auto;
+      white-space: pre;
+      margin-top: 16px;
+      scrollbar-width: thin;
+      scrollbar-color: #334155 transparent;
+    }
+
+    .warn-box {
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 18px;
+      font-size: 0.84rem;
+      line-height: 1.6;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      color: #92400e;
+    }
+
+    code {
+      background: #f1f5f9;
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 0.82em;
+      font-family: 'Courier New', monospace;
+    }
+
+    @media (max-width: 560px) {
+      .section-body { padding: 18px; }
+      .page-nav a { padding: 13px 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="page-nav">
+  <div class="page-nav-inner">
+    <a href="first-time-setup.html">Setup Wizard</a>
+    <a href="settings.html" class="active">Settings</a>
+    <a href="dev-mode.html">Dev Mode</a>
+  </div>
+</nav>
+
+<div class="page-header">
+  <div class="page-logo">Senti<span>nel</span> <span style="font-size:0.9rem;font-weight:600;color:#64748b;">Settings</span></div>
+  <div class="keys-meta" id="keys-meta">&nbsp;</div>
+</div>
+
+<!-- Import bar -->
+<div class="import-bar">
+  <div class="import-bar-header" onclick="toggleImport()">
+    <span>Import from existing <code>.env</code> →</span>
+    <span class="chevron" id="import-chevron">▼</span>
+  </div>
+  <div class="import-body" id="import-body">
+    <textarea id="env-import-text" placeholder="Paste your .env contents here — all matching fields will be auto-filled."></textarea>
+    <div class="import-actions">
+      <button class="btn-sm" onclick="importEnv()">Apply</button>
+      <button class="btn-sm" onclick="clearImport()">Clear</button>
+    </div>
+  </div>
+</div>
+
+<!-- Save bar -->
+<div class="save-bar">
+  <button class="btn-save" onclick="saveEnv()">Save .env file</button>
+  <button class="btn-sm" onclick="copyEnv(this)">Copy to clipboard</button>
+  <span class="save-status" id="save-status">Saved!</span>
+</div>
+
+<!-- ── Broker ── -->
+<div class="section" id="sec-broker">
+  <div class="section-header open" onclick="toggleSection('broker')">
+    <div class="section-title-wrap">
+      <span class="section-icon">🏦</span>
+      <div>
+        <div class="section-title">Broker</div>
+        <div class="section-subtitle">Public.com API credentials</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-broker">▼</span>
+  </div>
+  <div class="section-body open" id="body-broker">
+    <div class="field">
+      <label><span class="field-dot" id="dot-PUBLIC_API_SECRET"></span>API Secret <span class="badge badge-required">required</span></label>
+      <div class="input-row">
+        <input type="password" id="PUBLIC_API_SECRET" placeholder="your-public-api-secret" oninput="onField(this)">
+        <button class="field-btn" onclick="toggleVis('PUBLIC_API_SECRET', this)">Show</button>
+      </div>
+      <p class="hint">Public.com → Settings → API.</p>
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-PUBLIC_ACCOUNT_ID"></span>Account ID <span class="badge badge-required">required</span></label>
+      <input type="text" id="PUBLIC_ACCOUNT_ID" placeholder="5OP12345" oninput="onField(this)">
+      <p class="hint">Found in Public.com → Portfolio → Account details.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── AWS ── -->
+<div class="section" id="sec-aws">
+  <div class="section-header open" onclick="toggleSection('aws')">
+    <div class="section-title-wrap">
+      <span class="section-icon">☁️</span>
+      <div>
+        <div class="section-title">AWS</div>
+        <div class="section-subtitle">Region, Secrets Manager, SNS, Lambda URL</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-aws">▼</span>
+  </div>
+  <div class="section-body open" id="body-aws">
+    <div class="field">
+      <label>AWS Region <span class="badge badge-required">required</span></label>
+      <select id="AWS_REGION" onchange="onRegionChange()">
+        <option value="us-east-1">us-east-1 — N. Virginia</option>
+        <option value="us-east-2" selected>us-east-2 — Ohio (default)</option>
+        <option value="us-west-2">us-west-2 — Oregon</option>
+        <option value="eu-west-1">eu-west-1 — Ireland</option>
+        <option value="ap-southeast-1">ap-southeast-1 — Singapore</option>
+      </select>
+      <p class="hint">Not persisted across sessions — always verify before saving your .env.</p>
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-AWS_SECRET_NAME"></span>Secrets Manager Secret Name <span class="badge badge-required">required</span></label>
+      <input type="text" id="AWS_SECRET_NAME" value="trading-bot/secrets" placeholder="trading-bot/secrets" oninput="onField(this)">
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-SNS_TOPIC_ARN"></span>SNS Topic ARN <span class="badge badge-required">required</span></label>
+      <input type="text" id="SNS_TOPIC_ARN" placeholder="arn:aws:sns:us-east-2:123456789012:Sentinel" oninput="onField(this)">
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-LAMBDA_FUNCTION_URL"></span>Lambda Function URL <span class="badge badge-optional">optional</span></label>
+      <input type="text" id="LAMBDA_FUNCTION_URL" placeholder="https://abc123.lambda-url.us-east-2.on.aws" oninput="onField(this)">
+      <p class="hint">Required for one-click trade approval emails.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── AI & Market Data ── -->
+<div class="section" id="sec-ai">
+  <div class="section-header open" onclick="toggleSection('ai')">
+    <div class="section-title-wrap">
+      <span class="section-icon">🤖</span>
+      <div>
+        <div class="section-title">AI &amp; Market Data</div>
+        <div class="section-subtitle">Anthropic + 5 sentiment data sources</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-ai">▼</span>
+  </div>
+  <div class="section-body open" id="body-ai">
+    <div class="field">
+      <label><span class="field-dot" id="dot-ANTHROPIC_API_KEY"></span>Anthropic API Key <span class="badge badge-required">required</span></label>
+      <div class="input-row">
+        <input type="password" id="ANTHROPIC_API_KEY" placeholder="sk-ant-..." oninput="onField(this)">
+        <button class="field-btn" onclick="toggleVis('ANTHROPIC_API_KEY', this)">Show</button>
+      </div>
+      <p class="hint"><a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a></p>
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-POLYGON_API_KEY"></span>Polygon.io API Key <span class="badge badge-required">required</span></label>
+      <div class="input-row">
+        <input type="password" id="POLYGON_API_KEY" placeholder="your-polygon-key" oninput="onField(this)">
+        <button class="field-btn" onclick="toggleVis('POLYGON_API_KEY', this)">Show</button>
+      </div>
+      <p class="hint">Prior-day market data. Free tier (5 req/min). <a href="https://polygon.io" target="_blank" rel="noopener">polygon.io</a></p>
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-FINNHUB_API_KEY"></span>Finnhub API Key <span class="badge badge-required">required</span></label>
+      <div class="input-row">
+        <input type="password" id="FINNHUB_API_KEY" placeholder="your-finnhub-key" oninput="onField(this)">
+        <button class="field-btn" onclick="toggleVis('FINNHUB_API_KEY', this)">Show</button>
+      </div>
+      <p class="hint">News sentiment + EPS surprises. Free: 60 req/min. <a href="https://finnhub.io" target="_blank" rel="noopener">finnhub.io</a></p>
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-MARKETAUX_API_KEY"></span>MarketAux API Key <span class="badge badge-required">required</span></label>
+      <div class="input-row">
+        <input type="password" id="MARKETAUX_API_KEY" placeholder="your-marketaux-key" oninput="onField(this)">
+        <button class="field-btn" onclick="toggleVis('MARKETAUX_API_KEY', this)">Show</button>
+      </div>
+      <p class="hint">Entity-level news sentiment. Free: 100 req/day. <a href="https://www.marketaux.com" target="_blank" rel="noopener">marketaux.com</a></p>
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-NEWS_API_KEY"></span>NewsAPI Key <span class="badge badge-required">required</span></label>
+      <div class="input-row">
+        <input type="password" id="NEWS_API_KEY" placeholder="your-newsapi-key" oninput="onField(this)">
+        <button class="field-btn" onclick="toggleVis('NEWS_API_KEY', this)">Show</button>
+      </div>
+      <p class="hint"><a href="https://newsapi.org" target="_blank" rel="noopener">newsapi.org</a></p>
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-ALPHA_VANTAGE_API_KEY"></span>Alpha Vantage API Key <span class="badge badge-required">required</span></label>
+      <div class="input-row">
+        <input type="password" id="ALPHA_VANTAGE_API_KEY" placeholder="your-av-key" oninput="onField(this)">
+        <button class="field-btn" onclick="toggleVis('ALPHA_VANTAGE_API_KEY', this)">Show</button>
+      </div>
+      <p class="hint">Earnings calendar. Free: 25 req/day. <a href="https://www.alphavantage.co" target="_blank" rel="noopener">alphavantage.co</a></p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Kalshi ── -->
+<div class="section" id="sec-kalshi">
+  <div class="section-header" onclick="toggleSection('kalshi')">
+    <div class="section-title-wrap">
+      <span class="section-icon">🎲</span>
+      <div>
+        <div class="section-title">Kalshi <span style="font-size:0.75rem;font-weight:500;color:#94a3b8;">(Carpet Bagger)</span></div>
+        <div class="section-subtitle">Prediction market API credentials — optional</div>
+      </div>
+    </div>
+    <span class="section-chevron" id="chev-kalshi">▼</span>
+  </div>
+  <div class="section-body" id="body-kalshi">
+    <div class="warn-box">
+      The RSA private key is sensitive. In production the bot pulls it from AWS Secrets Manager. Paste it here for local <code>.env</code> only.
+    </div>
+    <div class="field">
+      <label><span class="field-dot" id="dot-KALSHI_API_KEY"></span>Kalshi API Key <span class="badge badge-optional">optional</span></label>
+      <div class="input-row">
+        <input type="password" id="KALSHI_API_KEY" placeholder="your-kalshi-api-key" oninput="onField(this)">
+        <button class="field-btn" onclick="toggleVis('KALSHI_API_KEY', this)">Show</button>
+      </div>
+      <p class="hint">Kalshi → Settings → API.</p>
+    </div>
+    <div class="field">
+      <label>Kalshi RSA Private Key <span class="badge badge-optional">optional</span></label>
+      <textarea id="KALSHI_RSA_PRIVATE_KEY" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;MIIEowIBAAKCAQEA...&#10;-----END RSA PRIVATE KEY-----" oninput="saveState()"></textarea>
+      <p class="hint">Paste the full PEM key. Will be serialized as a single line with <code>\n</code> in the .env output.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Security ── -->
+<div class="section" id="sec-security">
+  <div class="section-header" onclick="toggleSection('security')">
+    <div class="section-title-wrap">
+      <span class="section-icon">🔐</span>
+      <div>
+        <div class="section-title">Security</div>
+        <div class="section-subtitle">HMAC approval token for sell emails</div>
+      </div>
+    </div>
+    <span class="section-chevron" id="chev-security">▼</span>
+  </div>
+  <div class="section-body" id="body-security">
+    <div class="field">
+      <label><span class="field-dot" id="dot-SUGGESTION_TOKEN_SECRET"></span>Suggestion Token Secret <span class="badge badge-required">required</span></label>
+      <div class="input-row">
+        <input type="text" id="SUGGESTION_TOKEN_SECRET" placeholder="click Generate" oninput="onField(this)">
+        <button class="field-btn" onclick="generateSecret()">Generate</button>
+      </div>
+      <p class="hint">
+        Random 256-bit secret that signs one-click trade approval links. Store in
+        <a href="#" id="sm-link" target="_blank" rel="noopener">AWS Secrets Manager</a>.
+        Changing this invalidates all outstanding approval links.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Watchlist & Blocklist ── -->
+<div class="section" id="sec-watchlist">
+  <div class="section-header open" onclick="toggleSection('watchlist')">
+    <div class="section-title-wrap">
+      <span class="section-icon">📋</span>
+      <div>
+        <div class="section-title">Watchlist &amp; Block List</div>
+        <div class="section-subtitle">Tickers to scan and tickers to permanently exclude</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-watchlist">▼</span>
+  </div>
+  <div class="section-body open" id="body-watchlist">
+    <div class="field">
+      <label>Watchlist</label>
+      <div class="chip-wrap" id="watchlist-wrap" onclick="focusChipInput('watchlist-input')">
+        <input class="chip-input-el" id="watchlist-input" placeholder="Type ticker + Enter to add"
+               onkeydown="chipKeydown(event, watchlist, 'watchlist')" oninput="chipInputChanged(this)">
+      </div>
+      <p class="hint">Scanned on every Lambda run. Comma-paste supported.</p>
+    </div>
+    <div class="field">
+      <label>Block List <span class="badge badge-optional">optional</span></label>
+      <div class="chip-wrap" id="blocklist-wrap" onclick="focusChipInput('blocklist-input')">
+        <input class="chip-input-el" id="blocklist-input" placeholder="Type ticker + Enter to block"
+               onkeydown="chipKeydown(event, blocklist, 'blocklist')" oninput="chipInputChanged(this)">
+      </div>
+      <p class="hint">Excluded from all scanning and trade execution.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Risk Profile ── -->
+<div class="section" id="sec-risk">
+  <div class="section-header open" onclick="toggleSection('risk')">
+    <div class="section-title-wrap">
+      <span class="section-icon">⚖️</span>
+      <div>
+        <div class="section-title">Risk Profile</div>
+        <div class="section-subtitle">Position sizing, options, Carpet Bagger limits</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-risk">▼</span>
+  </div>
+  <div class="section-body open" id="body-risk">
+    <div class="field">
+      <label>Risk Tolerance</label>
+      <select id="RISK_TOLERANCE" onchange="saveState()">
+        <option value="conservative">Conservative — 5% max position, options disabled</option>
+        <option value="moderate" selected>Moderate — 15% max position, call options only (recommended)</option>
+        <option value="aggressive">Aggressive — 20% max position, calls enabled, higher concentration</option>
+      </select>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Call option orders</strong>
+        <span>Strong bullish signals (score ≥ 0.35) trigger a call option approval email.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="OPTIONS_CALLS_ENABLED" checked onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Carpet Bagger (Kalshi)</strong>
+        <span>Enable the sports prediction market strategy.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="CARPET_BAGGER_ENABLED" checked onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label>Max position per Kalshi game ($)</label>
+      <input type="number" id="CARPET_BAGGER_MAX_POSITION" value="1.00" min="0.01" step="0.01" oninput="saveState()">
+      <p class="hint">Maximum dollars risked per individual game.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Feature Toggles ── -->
+<div class="section" id="sec-toggles">
+  <div class="section-header open" onclick="toggleSection('toggles')">
+    <div class="section-title-wrap">
+      <span class="section-icon">🔧</span>
+      <div>
+        <div class="section-title">Feature Toggles</div>
+        <div class="section-subtitle">Sell approval, debug mode, kill switch</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-toggles">▼</span>
+  </div>
+  <div class="section-body open" id="body-toggles">
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Require sell approval</strong>
+        <span>Bot emails you an approval link before closing any position.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="REQUIRE_SELL_APPROVAL" onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Trade debug mode</strong>
+        <span>Receive an SNS email for every Claude agent decision, including non-trades.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="TRADE_DEBUG" onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Pause all trading</strong>
+        <span>Kill switch — no orders on next Lambda invocation. For quick pausing during development, use <a href="dev-mode.html">Dev Mode</a>.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="TRADING_PAUSED" onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+</div>
+
+<!-- ── Preview ── -->
+<div class="section" id="sec-preview">
+  <div class="section-header" onclick="toggleSection('preview')">
+    <div class="section-title-wrap">
+      <span class="section-icon">👁</span>
+      <div>
+        <div class="section-title">.env Preview</div>
+        <div class="section-subtitle">Review before saving</div>
+      </div>
+    </div>
+    <span class="section-chevron" id="chev-preview">▼</span>
+  </div>
+  <div class="section-body" id="body-preview">
+    <div class="env-preview" id="env-preview"></div>
+  </div>
+</div>
+
+<!-- Bottom save bar -->
+<div class="save-bar" style="margin-top:8px;">
+  <button class="btn-save" onclick="saveEnv()">Save .env file</button>
+  <button class="btn-sm" onclick="copyEnv(this)">Copy to clipboard</button>
+  <span class="save-status" id="save-status-bottom">Saved!</span>
+</div>
+
+<script>
+  const CACHE_KEY = 'sentinel_setup_v2';
+  const SKIP_PERSIST = new Set(['AWS_REGION']);
+
+  const KEY_FIELDS = [
+    'PUBLIC_API_SECRET', 'ANTHROPIC_API_KEY', 'POLYGON_API_KEY',
+    'FINNHUB_API_KEY', 'MARKETAUX_API_KEY', 'NEWS_API_KEY',
+    'ALPHA_VANTAGE_API_KEY', 'SUGGESTION_TOKEN_SECRET', 'KALSHI_API_KEY',
+  ];
+  const ALL_TEXT_FIELDS = [
+    'PUBLIC_API_SECRET', 'PUBLIC_ACCOUNT_ID',
+    'AWS_SECRET_NAME', 'SNS_TOPIC_ARN', 'LAMBDA_FUNCTION_URL',
+    'ANTHROPIC_API_KEY', 'POLYGON_API_KEY', 'FINNHUB_API_KEY',
+    'MARKETAUX_API_KEY', 'NEWS_API_KEY', 'ALPHA_VANTAGE_API_KEY',
+    'KALSHI_API_KEY', 'KALSHI_RSA_PRIVATE_KEY',
+    'SUGGESTION_TOKEN_SECRET', 'CARPET_BAGGER_MAX_POSITION',
+  ];
+  const ALL_BOOL_FIELDS = [
+    'REQUIRE_SELL_APPROVAL', 'TRADE_DEBUG', 'TRADING_PAUSED',
+    'OPTIONS_CALLS_ENABLED', 'CARPET_BAGGER_ENABLED',
+  ];
+
+  const WATCHLIST_DEFAULT = [
+    'AAPL','MSFT','TSLA','NVDA','AMD','META','AMZN','GOOGL',
+    'SPY','QQQ','IWM','XLE','OXY','BNO','BAC','C','INTC',
+    'PLTR','SOFI','SNAP','LYFT','F','PFE','MRNA','RIVN',
+    'SPX','NDX','VIX','CBTX',
+  ];
+  let watchlist = [...WATCHLIST_DEFAULT];
+  let blocklist = [];
+
+  // ── Section accordion ────────────────────────────────────────────────────
+  function toggleSection(id) {
+    const body = document.getElementById('body-' + id);
+    const chev = document.getElementById('chev-' + id);
+    const header = body.previousElementSibling;
+    const open = body.classList.toggle('open');
+    chev.classList.toggle('open', open);
+    header.classList.toggle('open', open);
+    if (id === 'preview' && open) renderPreview();
+  }
+
+  // ── Key counter ──────────────────────────────────────────────────────────
+  function updateKeysMeta() {
+    const filled = KEY_FIELDS.filter(id => {
+      const el = document.getElementById(id);
+      return el && el.value.trim().length > 0;
+    }).length;
+    const meta = document.getElementById('keys-meta');
+    meta.innerHTML = filled === 0
+      ? '&nbsp;'
+      : `<strong>${filled}/${KEY_FIELDS.length}</strong> keys configured`;
+  }
+
+  // ── Field dot ────────────────────────────────────────────────────────────
+  function updateDot(id) {
+    const dot = document.getElementById('dot-' + id);
+    if (!dot) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    dot.classList.toggle('filled', el.value.trim().length > 0);
+  }
+
+  function onField(el) {
+    updateDot(el.id);
+    updateKeysMeta();
+    saveState();
+  }
+
+  // ── Visibility toggle ─────────────────────────────────────────────────────
+  function toggleVis(id, btn) {
+    const el = document.getElementById(id);
+    const hidden = el.type === 'password';
+    el.type = hidden ? 'text' : 'password';
+    btn.textContent = hidden ? 'Hide' : 'Show';
+  }
+
+  // ── Secret generator ─────────────────────────────────────────────────────
+  function generateSecret() {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const el = document.getElementById('SUGGESTION_TOKEN_SECRET');
+    el.value = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    onField(el);
+  }
+
+  // ── Region-aware SM link ─────────────────────────────────────────────────
+  function onRegionChange() {
+    const region = document.getElementById('AWS_REGION').value || 'us-east-2';
+    const link = document.getElementById('sm-link');
+    if (link) link.href = `https://console.aws.amazon.com/secretsmanager/home?region=${region}#/newSecret`;
+  }
+
+  // ── localStorage ─────────────────────────────────────────────────────────
+  function saveState() {
+    const state = {};
+    ALL_TEXT_FIELDS.forEach(id => {
+      if (SKIP_PERSIST.has(id)) return;
+      const el = document.getElementById(id);
+      if (el) state[id] = el.value;
+    });
+    ALL_BOOL_FIELDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) state[id] = el.checked;
+    });
+    state['_watchlist'] = watchlist;
+    state['_blocklist'] = blocklist;
+    const rt = document.getElementById('RISK_TOLERANCE');
+    state['_select_RISK_TOLERANCE'] = rt ? rt.value : 'moderate';
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(state)); } catch {}
+  }
+
+  function restoreState() {
+    let raw;
+    try { raw = localStorage.getItem(CACHE_KEY); } catch {}
+    if (!raw) return;
+    let state;
+    try { state = JSON.parse(raw); } catch { return; }
+
+    ALL_TEXT_FIELDS.forEach(id => {
+      if (SKIP_PERSIST.has(id) || !(id in state)) return;
+      const el = document.getElementById(id);
+      if (el) { el.value = state[id]; updateDot(id); }
+    });
+    ALL_BOOL_FIELDS.forEach(id => {
+      if (!(id in state)) return;
+      const el = document.getElementById(id);
+      if (el) el.checked = state[id];
+    });
+    if (state['_select_RISK_TOLERANCE']) {
+      const el = document.getElementById('RISK_TOLERANCE');
+      if (el) el.value = state['_select_RISK_TOLERANCE'];
+    }
+    if (Array.isArray(state['_watchlist'])) { watchlist = state['_watchlist']; renderChips(); }
+    if (Array.isArray(state['_blocklist'])) { blocklist = state['_blocklist']; renderChips(); }
+    updateKeysMeta();
+  }
+
+  // ── Import ────────────────────────────────────────────────────────────────
+  function toggleImport() {
+    const body = document.getElementById('import-body');
+    const chevron = document.getElementById('import-chevron');
+    const open = body.classList.toggle('open');
+    chevron.classList.toggle('open', open);
+  }
+
+  function parseEnvText(text) {
+    const result = {};
+    for (const raw of text.split('\n')) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq < 0) continue;
+      const key = line.slice(0, eq).trim();
+      let val = line.slice(eq + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) ||
+          (val.startsWith("'") && val.endsWith("'"))) val = val.slice(1, -1);
+      val = val.replace(/\\n/g, '\n');
+      result[key] = val;
+    }
+    return result;
+  }
+
+  function importEnv() {
+    const text = document.getElementById('env-import-text').value;
+    const parsed = parseEnvText(text);
+
+    ALL_TEXT_FIELDS.forEach(id => {
+      if (id in parsed) {
+        const el = document.getElementById(id);
+        if (el) { el.value = parsed[id]; updateDot(id); }
+      }
+    });
+    ALL_BOOL_FIELDS.forEach(id => {
+      if (id in parsed) {
+        const el = document.getElementById(id);
+        if (el) el.checked = parsed[id].toLowerCase() === 'true';
+      }
+    });
+    if ('RISK_TOLERANCE' in parsed) {
+      const el = document.getElementById('RISK_TOLERANCE');
+      if (el) el.value = parsed['RISK_TOLERANCE'];
+    }
+    if ('WATCHLIST' in parsed && parsed['WATCHLIST'].trim()) {
+      watchlist = parsed['WATCHLIST'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+      renderChips();
+    }
+    if ('BLACKLIST' in parsed && parsed['BLACKLIST'].trim()) {
+      blocklist = parsed['BLACKLIST'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+      renderChips();
+    }
+    updateKeysMeta();
+    saveState();
+    document.getElementById('import-body').classList.remove('open');
+    document.getElementById('import-chevron').classList.remove('open');
+    document.getElementById('env-import-text').value = '';
+  }
+
+  function clearImport() { document.getElementById('env-import-text').value = ''; }
+
+  // ── Chip UI ───────────────────────────────────────────────────────────────
+  function renderChipList(containerId, list, isBlock) {
+    const wrap = document.getElementById(containerId);
+    if (!wrap) return;
+    const input = wrap.querySelector('.chip-input-el');
+    wrap.innerHTML = '';
+    list.forEach(ticker => {
+      const chip = document.createElement('span');
+      chip.className = 'chip' + (isBlock ? ' block-chip' : '');
+      chip.innerHTML = `${ticker} <span class="chip-x" onclick="removeChip('${containerId}', '${ticker}')">×</span>`;
+      wrap.appendChild(chip);
+    });
+    wrap.appendChild(input);
+  }
+
+  function renderChips() {
+    renderChipList('watchlist-wrap', watchlist, false);
+    renderChipList('blocklist-wrap', blocklist, true);
+  }
+
+  function focusChipInput(id) { const el = document.getElementById(id); if (el) el.focus(); }
+
+  function chipKeydown(event, list, which) {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault();
+      const ticker = event.target.value.trim().toUpperCase().replace(/[^A-Z]/g, '');
+      if (ticker && !list.includes(ticker)) { list.push(ticker); renderChips(); saveState(); }
+      event.target.value = '';
+    } else if (event.key === 'Backspace' && event.target.value === '' && list.length > 0) {
+      list.pop(); renderChips(); saveState();
+    }
+  }
+
+  function chipInputChanged(el) {
+    if (el.value.includes(',')) {
+      const tickers = el.value.split(',').map(t => t.trim().toUpperCase().replace(/[^A-Z]/g, '')).filter(Boolean);
+      const list = el.id === 'watchlist-input' ? watchlist : blocklist;
+      tickers.forEach(t => { if (t && !list.includes(t)) list.push(t); });
+      renderChips(); saveState(); el.value = '';
+    }
+  }
+
+  function removeChip(containerId, ticker) {
+    const list = containerId === 'watchlist-wrap' ? watchlist : blocklist;
+    const idx = list.indexOf(ticker);
+    if (idx >= 0) list.splice(idx, 1);
+    renderChips(); saveState();
+  }
+
+  // ── Value helper ─────────────────────────────────────────────────────────
+  function val(id) {
+    const el = document.getElementById(id);
+    if (!el) return '';
+    if (el.type === 'checkbox') return el.checked ? 'true' : 'false';
+    return el.value.trim();
+  }
+
+  // ── .env builder ─────────────────────────────────────────────────────────
+  function buildEnv() {
+    const rsaRaw = document.getElementById('KALSHI_RSA_PRIVATE_KEY').value.trim();
+    const rsaLine = rsaRaw
+      ? `KALSHI_RSA_PRIVATE_KEY="${rsaRaw.replace(/\n/g, '\\n')}"`
+      : `# KALSHI_RSA_PRIVATE_KEY=  # store in AWS Secrets Manager`;
+    return [
+      '# ============================================================',
+      '# Sentinel — generated by settings editor (docs/settings.html)',
+      '# Place in the root of trader-bot/ alongside lambda_function.py',
+      '# ============================================================',
+      '',
+      '# Broker',
+      `PUBLIC_API_SECRET=${val('PUBLIC_API_SECRET')}`,
+      `PUBLIC_ACCOUNT_ID=${val('PUBLIC_ACCOUNT_ID')}`,
+      '',
+      '# AWS',
+      `AWS_REGION=${val('AWS_REGION')}`,
+      `AWS_SECRET_NAME=${val('AWS_SECRET_NAME')}`,
+      `SNS_TOPIC_ARN=${val('SNS_TOPIC_ARN')}`,
+      `LAMBDA_FUNCTION_URL=${val('LAMBDA_FUNCTION_URL')}`,
+      '',
+      '# AI & market data',
+      `ANTHROPIC_API_KEY=${val('ANTHROPIC_API_KEY')}`,
+      `POLYGON_API_KEY=${val('POLYGON_API_KEY')}`,
+      `FINNHUB_API_KEY=${val('FINNHUB_API_KEY')}`,
+      `MARKETAUX_API_KEY=${val('MARKETAUX_API_KEY')}`,
+      `NEWS_API_KEY=${val('NEWS_API_KEY')}`,
+      `ALPHA_VANTAGE_API_KEY=${val('ALPHA_VANTAGE_API_KEY')}`,
+      '',
+      '# Kalshi (Carpet Bagger — optional)',
+      `KALSHI_API_KEY=${val('KALSHI_API_KEY')}`,
+      rsaLine,
+      '',
+      '# Security',
+      `SUGGESTION_TOKEN_SECRET=${val('SUGGESTION_TOKEN_SECRET')}`,
+      '',
+      '# Watchlist & blocklist',
+      `WATCHLIST=${watchlist.join(',')}`,
+      `BLACKLIST=${blocklist.join(',')}`,
+      '',
+      '# Risk profile',
+      `RISK_TOLERANCE=${val('RISK_TOLERANCE')}`,
+      `OPTIONS_CALLS_ENABLED=${val('OPTIONS_CALLS_ENABLED')}`,
+      `CARPET_BAGGER_ENABLED=${val('CARPET_BAGGER_ENABLED')}`,
+      `CARPET_BAGGER_MAX_POSITION=${val('CARPET_BAGGER_MAX_POSITION')}`,
+      '',
+      '# Feature toggles',
+      `REQUIRE_SELL_APPROVAL=${val('REQUIRE_SELL_APPROVAL')}`,
+      `TRADING_PAUSED=${val('TRADING_PAUSED')}`,
+      `TRADE_DEBUG=${val('TRADE_DEBUG')}`,
+    ].join('\n');
+  }
+
+  function renderPreview() {
+    const el = document.getElementById('env-preview');
+    if (el) el.textContent = buildEnv();
+  }
+
+  // ── Save .env ─────────────────────────────────────────────────────────────
+  function showSavedIndicator() {
+    ['save-status', 'save-status-bottom'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.classList.add('show');
+        setTimeout(() => el.classList.remove('show'), 3000);
+      }
+    });
+  }
+
+  async function saveEnv() {
+    const content = buildEnv();
+    if ('showSaveFilePicker' in window) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: '.env',
+          types: [{ description: 'Environment file', accept: { 'text/plain': ['.env', '.txt'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(content);
+        await writable.close();
+        showSavedIndicator();
+        return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    }
+    // Fallback download
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = '.env'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function copyEnv(btn) {
+    navigator.clipboard.writeText(buildEnv()).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => btn.textContent = orig, 2000);
+    });
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  renderChips();
+  restoreState();
+  onRegionChange();
+</script>
+
+</body>
+</html>

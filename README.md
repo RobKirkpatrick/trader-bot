@@ -121,12 +121,19 @@ Claude reads `SKILL.md` and invokes the matching script with the right arguments
 
 ## Quick Start
 
-The fastest path is the **[Sentinel Setup Wizard](docs/index.html)** — open it in any browser to get guided through every API key and config option. Key features:
+Three browser-based tools live in `docs/` — no install needed, secrets stay local:
 
-- **Import .env** — paste an existing `.env` file to pre-fill all fields instantly
-- **Live completion counter** — header shows "X/9 keys set" so you always know what's missing
+| Tool | Purpose |
+|------|---------|
+| **[First-Time Setup](docs/first-time-setup.html)** | Step-by-step wizard — walks through every setting, saves `.env` directly to your project folder |
+| **[Settings](docs/settings.html)** | All settings on one page — quickly update keys, watchlist, or toggles without re-running the wizard |
+| **[Dev Mode](docs/dev-mode.html)** | Pause trading instantly before deploying code changes — generates the exact AWS CLI command |
+
+Key features across all three:
+- **Direct file write** — Chrome/Edge can save `.env` straight to your project root (Firefox falls back to download)
+- **Import .env** — paste an existing `.env` to pre-fill all fields instantly
 - **localStorage persistence** — values auto-save as you type and restore on refresh
-- **AWS Secrets Manager link** — the approval token step links directly to Secrets Manager in whichever region you selected
+- **AWS Secrets Manager links** — region-aware links built from your config
 
 Once your `.env` is ready, proceed with the steps below.
 

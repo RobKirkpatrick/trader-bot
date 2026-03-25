@@ -16,8 +16,33 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 2rem;
+      padding: 5rem 2rem 2rem;
     }
+
+    /* ── Page nav ── */
+    .page-nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      background: #0a0a0a;
+      border-bottom: 1px solid #1a1a1a;
+      display: flex;
+      justify-content: center;
+      padding: 0 16px;
+      z-index: 10;
+    }
+    .page-nav-inner { display: flex; gap: 0; }
+    .page-nav a {
+      padding: 12px 16px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: #444;
+      text-decoration: none;
+      letter-spacing: 0.03em;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .page-nav a:hover { color: #888; }
+    .page-nav a.active { color: #3ddc84; border-bottom-color: #3ddc84; }
 
     .wordmark {
       font-size: 0.75rem;
@@ -177,6 +202,14 @@
   </style>
 </head>
 <body>
+
+  <nav class="page-nav">
+    <div class="page-nav-inner">
+      <a href="first-time-setup.html">Setup Wizard</a>
+      <a href="settings.html">Settings</a>
+      <a href="dev-mode.html" class="active">Dev Mode</a>
+    </div>
+  </nav>
 
   <div class="wordmark">Sentinel</div>
 

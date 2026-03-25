@@ -3,1300 +3,144 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Trader Bot — Setup Wizard</title>
+  <title>Sentinel — Configuration</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      background: #f0f2f5;
+      background: #0f172a;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 32px 16px 64px;
-      color: #0f172a;
+      justify-content: center;
+      padding: 2rem;
+      color: #e2e8f0;
     }
 
-    /* ── Header ── */
-    .wizard-header {
-      width: 100%;
-      max-width: 660px;
-      margin-bottom: 24px;
-    }
-    .wizard-logo {
-      font-size: 1.5rem;
+    .logo {
+      font-size: 2rem;
       font-weight: 800;
-      letter-spacing: -0.02em;
-      color: #0f172a;
-      margin-bottom: 18px;
-    }
-    .wizard-logo span { color: #22c55e; }
-    .wizard-meta {
-      font-size: 0.75rem;
-      color: #94a3b8;
-      font-weight: 600;
-      margin-top: -14px;
-      margin-bottom: 16px;
-    }
-    .wizard-meta strong { color: #22c55e; }
-
-    /* ── Progress ── */
-    .progress-track {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-    .progress-pip {
-      height: 4px;
-      flex: 1;
-      border-radius: 2px;
-      background: #e2e8f0;
-      transition: background 0.25s;
-    }
-    .progress-pip.done   { background: #22c55e; }
-    .progress-pip.active { background: #0f172a; }
-    .progress-label {
-      font-size: 0.72rem;
-      font-weight: 600;
-      color: #94a3b8;
-      white-space: nowrap;
-      margin-left: 10px;
-    }
-
-    /* ── Card ── */
-    .card {
-      width: 100%;
-      max-width: 660px;
-      background: #fff;
-      border-radius: 20px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.07);
-      padding: 40px 44px;
-    }
-
-    /* ── Steps ── */
-    .step { display: none; }
-    .step.active { display: block; }
-
-    .step-eyebrow {
-      font-size: 0.7rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      color: #22c55e;
+      letter-spacing: -0.03em;
+      color: #fff;
       margin-bottom: 6px;
     }
-    .step-title {
-      font-size: 1.5rem;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      color: #0f172a;
-      margin-bottom: 10px;
-    }
-    .step-desc {
-      font-size: 0.88rem;
-      color: #64748b;
-      line-height: 1.65;
-      margin-bottom: 28px;
-    }
+    .logo span { color: #22c55e; }
 
-    /* ── Import bar ── */
-    .import-bar {
-      background: #f8fafc;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 12px;
-      padding: 14px 18px;
-      margin-bottom: 24px;
-    }
-    .import-bar-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      user-select: none;
-    }
-    .import-bar-header span {
-      font-size: 0.84rem;
-      font-weight: 700;
-      color: #1e293b;
-    }
-    .import-bar-header .chevron {
-      font-size: 0.75rem;
-      color: #94a3b8;
-      transition: transform 0.2s;
-    }
-    .import-bar-header .chevron.open { transform: rotate(180deg); }
-    .import-body { display: none; margin-top: 14px; }
-    .import-body.open { display: block; }
-    .import-body textarea {
-      width: 100%;
-      height: 120px;
-      padding: 10px 12px;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 8px;
-      font-size: 0.72rem;
-      font-family: 'Courier New', monospace;
-      color: #0f172a;
-      background: #fff;
-      resize: vertical;
-      outline: none;
-    }
-    .import-body textarea:focus { border-color: #22c55e; }
-    .import-body .import-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 10px;
-    }
-
-    /* ── Info / warn boxes ── */
-    .info-box, .warn-box {
-      border-radius: 10px;
-      padding: 14px 16px;
-      margin-bottom: 22px;
-      font-size: 0.84rem;
-      line-height: 1.6;
-    }
-    .info-box { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
-    .warn-box { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
-
-    /* ── Checklist ── */
-    .checklist { list-style: none; margin-bottom: 0; }
-    .checklist li {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 12px 0;
-      border-bottom: 1px solid #f1f5f9;
-      font-size: 0.875rem;
-    }
-    .checklist li:last-child { border-bottom: none; }
-    .checklist li .icon { font-size: 1.1rem; flex-shrink: 0; margin-top: 1px; }
-    .checklist li .text { flex: 1; line-height: 1.5; }
-    .checklist li .text strong { display: block; margin-bottom: 2px; }
-    .checklist li .text span { color: #64748b; font-size: 0.82rem; }
-
-    /* ── Fields ── */
-    .field { margin-bottom: 22px; }
-    .field label {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 0.84rem;
-      font-weight: 700;
-      color: #1e293b;
-      margin-bottom: 7px;
-    }
-    .field-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #e2e8f0;
-      flex-shrink: 0;
-      transition: background 0.2s;
-    }
-    .field-dot.filled { background: #22c55e; }
-    .badge {
-      display: inline-block;
-      font-size: 0.62rem;
-      font-weight: 700;
-      padding: 2px 7px;
-      border-radius: 99px;
-      margin-left: 2px;
-      vertical-align: middle;
-      letter-spacing: 0.04em;
-    }
-    .badge-required  { background: #fee2e2; color: #dc2626; }
-    .badge-optional  { background: #f1f5f9; color: #64748b; }
-
-    .field input[type="text"],
-    .field input[type="password"],
-    .field input[type="number"],
-    .field select,
-    .field textarea {
-      width: 100%;
-      padding: 11px 14px;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 10px;
-      font-size: 0.875rem;
-      font-family: inherit;
-      color: #0f172a;
-      background: #f8fafc;
-      outline: none;
-      transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
-    }
-    .field input:focus,
-    .field select:focus,
-    .field textarea:focus {
-      border-color: #22c55e;
-      box-shadow: 0 0 0 3px rgba(34,197,94,0.13);
-      background: #fff;
-    }
-    .field textarea {
-      resize: vertical;
-      min-height: 90px;
-      font-family: 'Courier New', monospace;
-      font-size: 0.78rem;
-      line-height: 1.6;
-    }
-    .field .hint {
-      font-size: 0.78rem;
-      color: #94a3b8;
-      margin-top: 7px;
-      line-height: 1.55;
-    }
-    .field .hint a { color: #0ea5e9; text-decoration: none; }
-    .field .hint a:hover { text-decoration: underline; }
-
-    .input-row { display: flex; gap: 8px; }
-    .input-row input { flex: 1; }
-
-    .btn-sm {
-      padding: 11px 14px;
-      background: #f1f5f9;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 10px;
-      font-size: 0.8rem;
-      font-weight: 700;
-      color: #475569;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: background 0.15s, border-color 0.15s;
-      font-family: inherit;
-    }
-    .btn-sm:hover { background: #e2e8f0; border-color: #cbd5e1; }
-
-    /* ── Toggles ── */
-    .toggle-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 14px 16px;
-      background: #f8fafc;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 10px;
-      margin-bottom: 12px;
-      gap: 16px;
-    }
-    .toggle-info { flex: 1; }
-    .toggle-info strong { font-size: 0.875rem; display: block; margin-bottom: 3px; }
-    .toggle-info span { font-size: 0.78rem; color: #64748b; line-height: 1.5; }
-    .toggle { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
-    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
-    .toggle-slider {
-      position: absolute;
-      inset: 0;
-      background: #cbd5e1;
-      border-radius: 24px;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    .toggle-slider::before {
-      content: '';
-      position: absolute;
-      width: 18px; height: 18px;
-      left: 3px; top: 3px;
-      background: #fff;
-      border-radius: 50%;
-      transition: transform 0.2s;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
-    }
-    .toggle input:checked + .toggle-slider { background: #22c55e; }
-    .toggle input:checked + .toggle-slider::before { transform: translateX(20px); }
-
-    /* ── Risk tolerance select ── */
-    .risk-select {
-      width: 100%;
-      padding: 11px 14px;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 10px;
-      font-size: 0.875rem;
-      font-family: inherit;
-      color: #0f172a;
-      background: #f8fafc;
-      outline: none;
-      cursor: pointer;
-      margin-bottom: 18px;
-    }
-    .risk-select:focus { border-color: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,0.13); background: #fff; }
-
-    /* ── Chip / tag UI ── */
-    .chip-wrap {
-      border: 1.5px solid #e2e8f0;
-      border-radius: 10px;
-      background: #f8fafc;
-      padding: 10px 12px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      min-height: 48px;
-      cursor: text;
-      transition: border-color 0.18s;
-    }
-    .chip-wrap:focus-within { border-color: #22c55e; background: #fff; }
-    .chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      background: #0f172a;
-      color: #fff;
-      border-radius: 6px;
-      padding: 3px 8px;
-      font-size: 0.75rem;
-      font-weight: 700;
-      letter-spacing: 0.03em;
-    }
-    .chip.block-chip { background: #dc2626; }
-    .chip-x {
-      cursor: pointer;
-      opacity: 0.6;
+    .tagline {
       font-size: 0.85rem;
-      line-height: 1;
-      padding: 0 1px;
-    }
-    .chip-x:hover { opacity: 1; }
-    .chip-input-el {
-      border: none;
-      outline: none;
-      background: transparent;
-      font-size: 0.84rem;
-      font-family: inherit;
-      color: #0f172a;
-      min-width: 80px;
-      flex: 1;
-      padding: 3px 4px;
+      color: #64748b;
+      margin-bottom: 3rem;
+      text-align: center;
     }
 
-    /* ── Review / env preview ── */
-    .env-preview {
-      background: #0f172a;
-      color: #a3e635;
-      border-radius: 12px;
-      padding: 22px 24px;
-      font-family: 'Courier New', monospace;
-      font-size: 0.72rem;
-      line-height: 1.85;
-      max-height: 300px;
-      overflow-y: auto;
-      white-space: pre;
-      margin-bottom: 18px;
-      scrollbar-width: thin;
-      scrollbar-color: #334155 transparent;
-    }
-    .download-row {
+    .cards {
       display: flex;
-      gap: 10px;
-      margin-bottom: 32px;
+      flex-direction: column;
+      gap: 12px;
+      width: 100%;
+      max-width: 420px;
     }
 
-    /* ── Next steps ── */
-    .steps-list { list-style: none; counter-reset: steps; }
-    .steps-list li {
-      counter-increment: steps;
-      display: flex;
-      gap: 14px;
-      margin-bottom: 16px;
-      font-size: 0.86rem;
-      line-height: 1.6;
-      color: #334155;
-    }
-    .steps-list li::before {
-      content: counter(steps);
+    .card {
       display: flex;
       align-items: center;
-      justify-content: center;
-      width: 24px; height: 24px;
-      background: #0f172a;
-      color: #fff;
-      border-radius: 50%;
-      font-size: 0.72rem;
-      font-weight: 800;
+      gap: 18px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 20px 22px;
+      text-decoration: none;
+      color: inherit;
+      transition: background 0.15s, border-color 0.15s, transform 0.15s;
+    }
+    .card:hover {
+      background: #243447;
+      border-color: #22c55e;
+      transform: translateY(-1px);
+    }
+
+    .card-icon {
+      font-size: 1.6rem;
       flex-shrink: 0;
-      margin-top: 2px;
+      width: 44px;
+      text-align: center;
     }
-    .steps-list li code {
-      background: #f1f5f9;
-      color: #0f172a;
-      padding: 1px 6px;
-      border-radius: 4px;
+
+    .card-body { flex: 1; }
+
+    .card-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: #f1f5f9;
+      margin-bottom: 3px;
+    }
+
+    .card-desc {
       font-size: 0.78rem;
-      font-family: 'Courier New', monospace;
+      color: #64748b;
+      line-height: 1.5;
     }
 
-    /* ── Navigation ── */
-    .nav {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-top: 36px;
-      padding-top: 24px;
-      border-top: 1px solid #f1f5f9;
+    .card-arrow {
+      font-size: 1rem;
+      color: #334155;
+      flex-shrink: 0;
+      transition: color 0.15s;
     }
-    .btn-back {
-      padding: 10px 20px;
-      background: transparent;
-      border: 1.5px solid #e2e8f0;
-      border-radius: 10px;
-      font-size: 0.875rem;
-      font-weight: 700;
-      color: #94a3b8;
-      cursor: pointer;
-      font-family: inherit;
-      transition: all 0.15s;
-    }
-    .btn-back:hover { background: #f8fafc; color: #64748b; border-color: #cbd5e1; }
-    .btn-back:disabled { opacity: 0; pointer-events: none; }
-    .btn-next {
-      padding: 11px 28px;
-      background: #0f172a;
-      border: none;
-      border-radius: 10px;
-      font-size: 0.875rem;
-      font-weight: 700;
-      color: #fff;
-      cursor: pointer;
-      font-family: inherit;
-      transition: background 0.15s;
-    }
-    .btn-next:hover { background: #1e293b; }
-    .btn-download {
-      padding: 12px 28px;
-      background: #22c55e;
-      border: none;
-      border-radius: 10px;
-      font-size: 0.9rem;
-      font-weight: 700;
-      color: #fff;
-      cursor: pointer;
-      font-family: inherit;
-      transition: background 0.15s;
-    }
-    .btn-download:hover { background: #16a34a; }
+    .card:hover .card-arrow { color: #22c55e; }
 
-    code {
-      background: #f1f5f9;
-      padding: 1px 5px;
-      border-radius: 4px;
-      font-size: 0.82em;
-      font-family: 'Courier New', monospace;
-    }
+    .card.highlight { border-color: #22c55e; }
+    .card.highlight .card-title { color: #22c55e; }
 
-    @media (max-width: 560px) {
-      .card { padding: 28px 22px; }
+    .footer {
+      margin-top: 2.5rem;
+      font-size: 0.72rem;
+      color: #334155;
+      text-align: center;
     }
+    .footer a { color: #475569; text-decoration: none; }
+    .footer a:hover { color: #94a3b8; }
   </style>
 </head>
 <body>
 
-<div class="wizard-header">
-  <div class="wizard-logo">Senti<span>nel</span></div>
-  <div class="wizard-meta" id="keys-meta">&nbsp;</div>
-  <div class="progress-track">
-    <div class="progress-pip active" id="pip-0"></div>
-    <div class="progress-pip" id="pip-1"></div>
-    <div class="progress-pip" id="pip-2"></div>
-    <div class="progress-pip" id="pip-3"></div>
-    <div class="progress-pip" id="pip-4"></div>
-    <div class="progress-pip" id="pip-5"></div>
-    <div class="progress-pip" id="pip-6"></div>
-    <div class="progress-pip" id="pip-7"></div>
-    <div class="progress-pip" id="pip-8"></div>
-    <div class="progress-pip" id="pip-9"></div>
-    <span class="progress-label" id="progress-label">Step 1 of 10</span>
-  </div>
-</div>
+  <div class="logo">Senti<span>nel</span></div>
+  <p class="tagline">Multi-source sentiment trading bot for Public.com</p>
 
-<div class="card">
-
-  <!-- ── Step 1: Welcome ── -->
-  <div class="step active" id="step-0">
-    <div class="step-eyebrow">Welcome</div>
-    <div class="step-title">Let's set up your Traderbot</div>
-    <div class="step-desc">
-      This wizard walks you through every configuration value and generates a
-      <code>.env</code> file ready to drop into your project.
-      Your secrets never leave your browser — everything runs locally.
-    </div>
-
-    <div class="import-bar">
-      <div class="import-bar-header" onclick="toggleImport()">
-        <span>Already have a <code>.env</code>? Import it to pre-fill all fields →</span>
-        <span class="chevron" id="import-chevron">▼</span>
+  <div class="cards">
+    <a href="first-time-setup.html" class="card highlight">
+      <div class="card-icon">🚀</div>
+      <div class="card-body">
+        <div class="card-title">First-Time Setup</div>
+        <div class="card-desc">Step-by-step wizard — walks you through every setting and saves your <code style="background:#0f172a;padding:1px 5px;border-radius:4px;font-size:0.8em;">.env</code> file.</div>
       </div>
-      <div class="import-body" id="import-body">
-        <textarea id="env-import-text" placeholder="Paste your .env contents here — all matching fields will be auto-filled.&#10;&#10;Tip: dotfiles are hidden in the macOS file picker, so paste is the easiest path."></textarea>
-        <div class="import-actions">
-          <button class="btn-sm" onclick="importEnv()">Apply</button>
-          <button class="btn-sm" onclick="clearImport()">Clear</button>
-        </div>
-      </div>
-    </div>
+      <div class="card-arrow">→</div>
+    </a>
 
-    <div class="info-box">
-      Sentinel runs two strategies: a <strong>Sentiment Trader</strong> that buys stocks and options on
-      Public.com based on multi-source news sentiment, and <strong>Carpet Bagger</strong> that trades
-      Kalshi sports prediction markets — designed to cover the bot's compute costs.
-    </div>
-    <p style="font-size:0.84rem;font-weight:700;margin-bottom:10px;color:#1e293b;">You'll need accounts with:</p>
-    <ul class="checklist">
-      <li>
-        <span class="icon">🏦</span>
-        <span class="text">
-          <strong>Public.com</strong>
-          <span>Brokerage for stock and options trading. Enable API access in Account Settings.</span>
-        </span>
-      </li>
-      <li>
-        <span class="icon">☁️</span>
-        <span class="text">
-          <strong>AWS</strong>
-          <span>Lambda, EventBridge, DynamoDB, SNS, and Secrets Manager. Free tier covers most usage; expect ~$5/mo.</span>
-        </span>
-      </li>
-      <li>
-        <span class="icon">🤖</span>
-        <span class="text">
-          <strong>Anthropic</strong>
-          <span>Claude API for trade decisions and the evening suggestion engine. $5–20/mo depending on usage.</span>
-        </span>
-      </li>
-      <li>
-        <span class="icon">📈</span>
-        <span class="text">
-          <strong>Polygon, Finnhub, MarketAux, NewsAPI, Alpha Vantage</strong>
-          <span>Sentiment data sources. All have free tiers sufficient for the bot's usage.</span>
-        </span>
-      </li>
-      <li>
-        <span class="icon">🎲</span>
-        <span class="text">
-          <strong>Kalshi</strong>
-          <span>Prediction markets for Carpet Bagger. Optional — skip if you only want the Sentiment Trader.</span>
-        </span>
-      </li>
-    </ul>
+    <a href="settings.html" class="card">
+      <div class="card-icon">⚙️</div>
+      <div class="card-body">
+        <div class="card-title">Settings</div>
+        <div class="card-desc">All settings on one page — quickly update API keys, watchlist, risk profile, or feature toggles.</div>
+      </div>
+      <div class="card-arrow">→</div>
+    </a>
+
+    <a href="dev-mode.html" class="card">
+      <div class="card-icon">🛑</div>
+      <div class="card-body">
+        <div class="card-title">Dev Mode</div>
+        <div class="card-desc">Pause trading instantly before deploying code changes. Generates the exact AWS CLI command.</div>
+      </div>
+      <div class="card-arrow">→</div>
+    </a>
   </div>
 
-  <!-- ── Step 2: Public.com ── -->
-  <div class="step" id="step-1">
-    <div class="step-eyebrow">Broker</div>
-    <div class="step-title">Public.com</div>
-    <div class="step-desc">
-      The bot buys stocks and options through your Public.com brokerage account.
-      Fractional shares are supported — trades start at $2.
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-PUBLIC_API_SECRET"></span>API Secret <span class="badge badge-required">required</span></label>
-      <div class="input-row">
-        <input type="password" id="PUBLIC_API_SECRET" placeholder="your-public-api-secret" oninput="onField(this)">
-        <button class="btn-sm" onclick="toggleVis('PUBLIC_API_SECRET', this)">Show</button>
-      </div>
-      <p class="hint">Public.com → Settings → API. Generate a personal API secret if you haven't already.</p>
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-PUBLIC_ACCOUNT_ID"></span>Account ID <span class="badge badge-required">required</span></label>
-      <input type="text" id="PUBLIC_ACCOUNT_ID" placeholder="5OP12345" oninput="onField(this)">
-      <p class="hint">Your brokerage account ID. Found in Public.com → Portfolio → Account details.</p>
-    </div>
+  <div class="footer">
+    <a href="https://github.com/RobKirkpatrick/trader-bot" target="_blank" rel="noopener">github.com/RobKirkpatrick/trader-bot</a>
   </div>
-
-  <!-- ── Step 3: AWS ── -->
-  <div class="step" id="step-2">
-    <div class="step-eyebrow">Infrastructure</div>
-    <div class="step-title">AWS Setup</div>
-    <div class="step-desc">
-      The bot runs as an AWS Lambda function triggered by EventBridge schedules.
-      SNS handles email alerts. Secrets Manager holds all API keys so nothing is hardcoded.
-    </div>
-    <div class="field">
-      <label>AWS Region <span class="badge badge-required">required</span></label>
-      <select id="AWS_REGION" onchange="onRegionChange()">
-        <option value="us-east-1">us-east-1 — N. Virginia</option>
-        <option value="us-east-2" selected>us-east-2 — Ohio (default)</option>
-        <option value="us-west-2">us-west-2 — Oregon</option>
-        <option value="eu-west-1">eu-west-1 — Ireland</option>
-        <option value="ap-southeast-1">ap-southeast-1 — Singapore</option>
-      </select>
-      <p class="hint">Region where your Lambda, DynamoDB, and Secrets Manager secret live. Not persisted across sessions — always verify before generating.</p>
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-AWS_SECRET_NAME"></span>Secrets Manager Secret Name <span class="badge badge-required">required</span></label>
-      <input type="text" id="AWS_SECRET_NAME" value="trading-bot/secrets" placeholder="trading-bot/secrets" oninput="onField(this)">
-      <p class="hint">The name of the secret that holds all your API keys at runtime. Default matches what <code>deploy.sh</code> expects.</p>
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-SNS_TOPIC_ARN"></span>SNS Topic ARN <span class="badge badge-required">required</span></label>
-      <input type="text" id="SNS_TOPIC_ARN" placeholder="arn:aws:sns:us-east-2:123456789012:Sentinel" oninput="onField(this)">
-      <p class="hint">Create an SNS topic, subscribe your email, confirm the subscription, then paste the ARN here. This is how the bot emails you.</p>
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-LAMBDA_FUNCTION_URL"></span>Lambda Function URL <span class="badge badge-optional">optional</span></label>
-      <input type="text" id="LAMBDA_FUNCTION_URL" placeholder="https://abc123.lambda-url.us-east-2.on.aws" oninput="onField(this)">
-      <p class="hint">Required for one-click trade approvals. Set this after deploying — it appears in the AWS console under your function's Configuration → Function URL.</p>
-    </div>
-  </div>
-
-  <!-- ── Step 4: Sentiment Engine ── -->
-  <div class="step" id="step-3">
-    <div class="step-eyebrow">Sentiment Engine</div>
-    <div class="step-title">AI &amp; Market Data APIs</div>
-    <div class="step-desc">
-      These power the 6-source sentiment scanner. Each ticker gets a blended score from price action,
-      news sentiment, macro headlines, and community momentum. All services have free tiers.
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-ANTHROPIC_API_KEY"></span>Anthropic API Key <span class="badge badge-required">required</span></label>
-      <div class="input-row">
-        <input type="password" id="ANTHROPIC_API_KEY" placeholder="sk-ant-..." oninput="onField(this)">
-        <button class="btn-sm" onclick="toggleVis('ANTHROPIC_API_KEY', this)">Show</button>
-      </div>
-      <p class="hint">Powers Claude Sonnet (trade decisions) and the evening suggestion engine. <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a></p>
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-POLYGON_API_KEY"></span>Polygon.io API Key <span class="badge badge-required">required</span></label>
-      <div class="input-row">
-        <input type="password" id="POLYGON_API_KEY" placeholder="your-polygon-key" oninput="onField(this)">
-        <button class="btn-sm" onclick="toggleVis('POLYGON_API_KEY', this)">Show</button>
-      </div>
-      <p class="hint">Prior-day market data. Free tier (5 req/min) is fine — the scanner adds a 13s delay automatically. <a href="https://polygon.io" target="_blank" rel="noopener">polygon.io</a></p>
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-FINNHUB_API_KEY"></span>Finnhub API Key <span class="badge badge-required">required</span></label>
-      <div class="input-row">
-        <input type="password" id="FINNHUB_API_KEY" placeholder="your-finnhub-key" oninput="onField(this)">
-        <button class="btn-sm" onclick="toggleVis('FINNHUB_API_KEY', this)">Show</button>
-      </div>
-      <p class="hint">Pre-computed news sentiment + EPS surprise modifier. Free: 60 req/min. <a href="https://finnhub.io" target="_blank" rel="noopener">finnhub.io</a></p>
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-MARKETAUX_API_KEY"></span>MarketAux API Key <span class="badge badge-required">required</span></label>
-      <div class="input-row">
-        <input type="password" id="MARKETAUX_API_KEY" placeholder="your-marketaux-key" oninput="onField(this)">
-        <button class="btn-sm" onclick="toggleVis('MARKETAUX_API_KEY', this)">Show</button>
-      </div>
-      <p class="hint">Entity-level news sentiment. Free: 100 req/day. <a href="https://www.marketaux.com" target="_blank" rel="noopener">marketaux.com</a></p>
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-NEWS_API_KEY"></span>NewsAPI Key <span class="badge badge-required">required</span></label>
-      <div class="input-row">
-        <input type="password" id="NEWS_API_KEY" placeholder="your-newsapi-key" oninput="onField(this)">
-        <button class="btn-sm" onclick="toggleVis('NEWS_API_KEY', this)">Show</button>
-      </div>
-      <p class="hint">Macro headlines for Claude's market read. <a href="https://newsapi.org" target="_blank" rel="noopener">newsapi.org</a></p>
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-ALPHA_VANTAGE_API_KEY"></span>Alpha Vantage API Key <span class="badge badge-required">required</span></label>
-      <div class="input-row">
-        <input type="password" id="ALPHA_VANTAGE_API_KEY" placeholder="your-av-key" oninput="onField(this)">
-        <button class="btn-sm" onclick="toggleVis('ALPHA_VANTAGE_API_KEY', this)">Show</button>
-      </div>
-      <p class="hint">Earnings calendar — raises the trade threshold when earnings are within 7 days. <a href="https://www.alphavantage.co" target="_blank" rel="noopener">alphavantage.co</a></p>
-    </div>
-  </div>
-
-  <!-- ── Step 5: Kalshi ── -->
-  <div class="step" id="step-4">
-    <div class="step-eyebrow">Carpet Bagger</div>
-    <div class="step-title">Kalshi <span style="font-size:1rem;font-weight:500;color:#94a3b8;">(optional)</span></div>
-    <div class="step-desc">
-      Carpet Bagger trades Kalshi prediction markets on live sports game outcomes.
-      Its goal is to generate enough to cover the bot's compute costs — a small float of $50–100 is enough.
-      Skip this step if you only want the Sentiment Trader.
-    </div>
-    <div class="warn-box">
-      The RSA private key is sensitive. In production the bot pulls it from AWS Secrets Manager — store it there. You can paste it here for local testing only.
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-KALSHI_API_KEY"></span>Kalshi API Key <span class="badge badge-optional">optional</span></label>
-      <div class="input-row">
-        <input type="password" id="KALSHI_API_KEY" placeholder="your-kalshi-api-key" oninput="onField(this)">
-        <button class="btn-sm" onclick="toggleVis('KALSHI_API_KEY', this)">Show</button>
-      </div>
-      <p class="hint">Found in Kalshi → Settings → API.</p>
-    </div>
-    <div class="field">
-      <label>Kalshi RSA Private Key <span class="badge badge-optional">optional</span></label>
-      <textarea id="KALSHI_RSA_PRIVATE_KEY" placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;MIIEowIBAAKCAQEA...&#10;-----END RSA PRIVATE KEY-----" oninput="onField(this)"></textarea>
-      <p class="hint">
-        Paste the full PEM key including the BEGIN/END lines. The wizard will serialize it as a single quoted line with <code>\n</code> for newlines — the format Secrets Manager expects.
-      </p>
-    </div>
-  </div>
-
-  <!-- ── Step 6: Approval Token ── -->
-  <div class="step" id="step-5">
-    <div class="step-eyebrow">Security</div>
-    <div class="step-title">Approval Token</div>
-    <div class="step-desc">
-      Evening suggestion emails include one-click trade approval links. Each link is signed with
-      HMAC-SHA256 using this secret so only you — with access to your inbox — can approve trades.
-      Links expire after 20 hours.
-    </div>
-    <div class="field">
-      <label><span class="field-dot" id="dot-SUGGESTION_TOKEN_SECRET"></span>Suggestion Token Secret <span class="badge badge-required">required</span></label>
-      <div class="input-row">
-        <input type="text" id="SUGGESTION_TOKEN_SECRET" placeholder="click Generate" oninput="onField(this)">
-        <button class="btn-sm" onclick="generateSecret()">Generate</button>
-      </div>
-      <p class="hint">
-        A random 256-bit secret. Generate one now and save it in
-        <a href="#" id="sm-link" target="_blank" rel="noopener">AWS Secrets Manager</a>
-        under <code>SUGGESTION_TOKEN_SECRET</code>.
-        If this value ever changes, all outstanding approval links stop working.
-      </p>
-    </div>
-  </div>
-
-  <!-- ── Step 7: Feature Toggles ── -->
-  <div class="step" id="step-6">
-    <div class="step-eyebrow">Behavior</div>
-    <div class="step-title">Feature Toggles</div>
-    <div class="step-desc">
-      Configure how the bot operates. These can be changed at any time via Lambda environment variables — no redeploy needed.
-    </div>
-    <div class="toggle-row">
-      <div class="toggle-info">
-        <strong>Require sell approval</strong>
-        <span>When on, the bot emails you an approval link before closing any position. Recommended while you're getting comfortable with the bot's behavior.</span>
-      </div>
-      <label class="toggle">
-        <input type="checkbox" id="REQUIRE_SELL_APPROVAL" onchange="saveState()">
-        <span class="toggle-slider"></span>
-      </label>
-    </div>
-    <div class="toggle-row">
-      <div class="toggle-info">
-        <strong>Trade debug mode</strong>
-        <span>When on, you receive an SNS email for every Claude agent decision — including ones that don't result in a trade. Useful for tuning thresholds in the first week.</span>
-      </div>
-      <label class="toggle">
-        <input type="checkbox" id="TRADE_DEBUG" onchange="saveState()">
-        <span class="toggle-slider"></span>
-      </label>
-    </div>
-    <div class="toggle-row">
-      <div class="toggle-info">
-        <strong>Pause all trading</strong>
-        <span>Kill switch. When on, no orders are placed on the next Lambda invocation. Toggle this in Secrets Manager for instant effect without a redeploy.</span>
-      </div>
-      <label class="toggle">
-        <input type="checkbox" id="TRADING_PAUSED" onchange="saveState()">
-        <span class="toggle-slider"></span>
-      </label>
-    </div>
-  </div>
-
-  <!-- ── Step 8: Risk Profile ── -->
-  <div class="step" id="step-7">
-    <div class="step-eyebrow">Risk</div>
-    <div class="step-title">Risk Profile</div>
-    <div class="step-desc">
-      Configure your risk tolerance and strategy settings. These drive position sizing, options eligibility,
-      and Carpet Bagger behavior. All can be tuned later via your <code>.env</code> or Secrets Manager.
-    </div>
-    <div class="field">
-      <label>Risk Tolerance</label>
-      <select id="RISK_TOLERANCE" class="risk-select" onchange="saveState()">
-        <option value="conservative">Conservative — 5% max position, options disabled, cautious on VIX spikes</option>
-        <option value="moderate" selected>Moderate — 15% max position, call options only (recommended)</option>
-        <option value="aggressive">Aggressive — 20% max position, calls enabled, higher concentration</option>
-      </select>
-    </div>
-    <div class="toggle-row">
-      <div class="toggle-info">
-        <strong>Call option orders</strong>
-        <span>When on, strong bullish signals (score ≥ 0.35) trigger a one-click call option approval email in addition to buying stock.</span>
-      </div>
-      <label class="toggle">
-        <input type="checkbox" id="OPTIONS_CALLS_ENABLED" checked onchange="saveState()">
-        <span class="toggle-slider"></span>
-      </label>
-    </div>
-    <div class="toggle-row">
-      <div class="toggle-info">
-        <strong>Carpet Bagger (Kalshi)</strong>
-        <span>Enable the sports prediction market strategy. Uses a small float ($50–100) to cover compute costs.</span>
-      </div>
-      <label class="toggle">
-        <input type="checkbox" id="CARPET_BAGGER_ENABLED" checked onchange="saveState()">
-        <span class="toggle-slider"></span>
-      </label>
-    </div>
-    <div class="field" style="margin-top:16px;">
-      <label>Max position per Kalshi game ($)</label>
-      <input type="number" id="CARPET_BAGGER_MAX_POSITION" value="1.00" min="0.01" step="0.01" oninput="saveState()">
-      <p class="hint">Maximum dollars risked per individual game. Keeps overnight lockup risk minimal.</p>
-    </div>
-  </div>
-
-  <!-- ── Step 9: Watchlist & Blocklist ── -->
-  <div class="step" id="step-8">
-    <div class="step-eyebrow">Watchlist</div>
-    <div class="step-title">Tickers &amp; Block List</div>
-    <div class="step-desc">
-      The <strong>watchlist</strong> is scanned on every run. The <strong>block list</strong> permanently prevents
-      scanning or trading a ticker — useful for positions you hold long-term and never want the bot to touch.
-    </div>
-    <div class="field">
-      <label>Watchlist</label>
-      <div class="chip-wrap" id="watchlist-wrap" onclick="focusChipInput('watchlist-input')">
-        <input class="chip-input-el" id="watchlist-input" placeholder="Type ticker + Enter to add"
-               onkeydown="chipKeydown(event, watchlist, 'watchlist')" oninput="chipInputChanged(this)">
-      </div>
-      <p class="hint">Pre-filled with defaults. Add or remove tickers to match your strategy.</p>
-    </div>
-    <div class="field">
-      <label>Block List <span class="badge badge-optional">optional</span></label>
-      <div class="chip-wrap" id="blocklist-wrap" onclick="focusChipInput('blocklist-input')">
-        <input class="chip-input-el" id="blocklist-input" placeholder="Type ticker + Enter to block"
-               onkeydown="chipKeydown(event, blocklist, 'blocklist')" oninput="chipInputChanged(this)">
-      </div>
-      <p class="hint">Tickers listed here are excluded from all scanning and trade execution.</p>
-    </div>
-  </div>
-
-  <!-- ── Step 10: Download ── -->
-  <div class="step" id="step-9">
-    <div class="step-eyebrow">All done</div>
-    <div class="step-title">Download your .env</div>
-    <div class="step-desc">
-      Place the downloaded file in the root of the <code>trader-bot</code> directory alongside
-      <code>lambda_function.py</code>.
-    </div>
-    <div class="env-preview" id="env-preview"></div>
-    <div class="download-row">
-      <button class="btn-download" onclick="downloadEnv()">Download .env</button>
-      <button class="btn-sm" onclick="copyEnv(this)">Copy to clipboard</button>
-    </div>
-    <p style="font-size:0.84rem;font-weight:700;margin-bottom:14px;color:#1e293b;">Next steps:</p>
-    <ol class="steps-list">
-      <li>Place the <code>.env</code> in the root of your <code>trader-bot</code> directory.</li>
-      <li>
-        Upload your secrets to AWS Secrets Manager:<br>
-        <code>aws secretsmanager create-secret --name trading-bot/secrets --secret-string file://.env</code>
-      </li>
-      <li>
-        Create the DynamoDB log table:<br>
-        <code>aws dynamodb create-table --table-name trading-bot-logs --attribute-definitions AttributeName=trade_id,AttributeType=S --key-schema AttributeName=trade_id,KeyType=HASH --billing-mode PAY_PER_REQUEST</code>
-      </li>
-      <li>Run <code>./deploy.sh</code> to build the Lambda package and create all EventBridge schedules.</li>
-      <li>Verify: <code>source .venv/bin/activate && python -c "import requests, anthropic, boto3, dotenv; print('OK')"</code></li>
-    </ol>
-  </div>
-
-  <!-- ── Navigation ── -->
-  <div class="nav">
-    <button class="btn-back" id="btn-back" onclick="prevStep()" disabled>Back</button>
-    <button class="btn-next" id="btn-next" onclick="nextStep()">Get started</button>
-  </div>
-
-</div>
-
-<script>
-  // ── Constants ────────────────────────────────────────────────────────────
-  const TOTAL = 10;
-  const CACHE_KEY = 'sentinel_setup_v2';
-  // AWS_REGION excluded from persistence — prevents stale region bugs
-  const SKIP_PERSIST = new Set(['AWS_REGION']);
-
-  const KEY_FIELDS = [
-    'PUBLIC_API_SECRET', 'ANTHROPIC_API_KEY', 'POLYGON_API_KEY',
-    'FINNHUB_API_KEY', 'MARKETAUX_API_KEY', 'NEWS_API_KEY',
-    'ALPHA_VANTAGE_API_KEY', 'SUGGESTION_TOKEN_SECRET', 'KALSHI_API_KEY',
-  ];
-  const ALL_TEXT_FIELDS = [
-    'PUBLIC_API_SECRET', 'PUBLIC_ACCOUNT_ID',
-    'AWS_SECRET_NAME', 'SNS_TOPIC_ARN', 'LAMBDA_FUNCTION_URL',
-    'ANTHROPIC_API_KEY', 'POLYGON_API_KEY', 'FINNHUB_API_KEY',
-    'MARKETAUX_API_KEY', 'NEWS_API_KEY', 'ALPHA_VANTAGE_API_KEY',
-    'KALSHI_API_KEY', 'KALSHI_RSA_PRIVATE_KEY',
-    'SUGGESTION_TOKEN_SECRET',
-    'CARPET_BAGGER_MAX_POSITION',
-  ];
-  const ALL_BOOL_FIELDS = [
-    'REQUIRE_SELL_APPROVAL', 'TRADE_DEBUG', 'TRADING_PAUSED',
-    'OPTIONS_CALLS_ENABLED', 'CARPET_BAGGER_ENABLED',
-  ];
-
-  // ── State ────────────────────────────────────────────────────────────────
-  let current = 0;
-
-  const WATCHLIST_DEFAULT = [
-    'AAPL','MSFT','TSLA','NVDA','AMD','META','AMZN','GOOGL',
-    'SPY','QQQ','IWM','XLE','OXY','BNO','BAC','C','INTC',
-    'PLTR','SOFI','SNAP','LYFT','F','PFE','MRNA','RIVN',
-    'SPX','NDX','VIX','CBTX',
-  ];
-  let watchlist = [...WATCHLIST_DEFAULT];
-  let blocklist = [];
-
-  // ── Navigation ───────────────────────────────────────────────────────────
-  function updateUI() {
-    document.querySelectorAll('.step').forEach((el, i) => {
-      el.classList.toggle('active', i === current);
-    });
-    document.querySelectorAll('.progress-pip').forEach((el, i) => {
-      el.className = 'progress-pip';
-      if (i < current) el.classList.add('done');
-      if (i === current) el.classList.add('active');
-    });
-    document.getElementById('progress-label').textContent =
-      `Step ${current + 1} of ${TOTAL}`;
-    document.getElementById('btn-back').disabled = current === 0;
-
-    const next = document.getElementById('btn-next');
-    if (current === TOTAL - 1) {
-      next.style.display = 'none';
-    } else {
-      next.style.display = '';
-      next.textContent = current === 0 ? 'Get started' : 'Continue';
-    }
-
-    if (current === TOTAL - 1) renderPreview();
-    updateKeysMeta();
-    updateSmLink();
-  }
-
-  function nextStep() {
-    if (current < TOTAL - 1) { current++; updateUI(); scrollTo({ top: 0, behavior: 'smooth' }); }
-  }
-  function prevStep() {
-    if (current > 0) { current--; updateUI(); scrollTo({ top: 0, behavior: 'smooth' }); }
-  }
-
-  // ── Key counter ──────────────────────────────────────────────────────────
-  function updateKeysMeta() {
-    const filled = KEY_FIELDS.filter(id => {
-      const el = document.getElementById(id);
-      return el && el.value.trim().length > 0;
-    }).length;
-    const meta = document.getElementById('keys-meta');
-    if (filled === 0) {
-      meta.innerHTML = '&nbsp;';
-    } else {
-      meta.innerHTML = `<strong>${filled}/${KEY_FIELDS.length}</strong> keys configured`;
-    }
-  }
-
-  // ── Per-field status dots ────────────────────────────────────────────────
-  function updateDot(id) {
-    const dot = document.getElementById('dot-' + id);
-    if (!dot) return;
-    const el = document.getElementById(id);
-    if (!el) return;
-    const filled = el.type === 'checkbox' ? true : el.value.trim().length > 0;
-    dot.classList.toggle('filled', filled);
-  }
-
-  function onField(el) {
-    updateDot(el.id);
-    updateKeysMeta();
-    saveState();
-  }
-
-  // ── Field visibility toggle ──────────────────────────────────────────────
-  function toggleVis(id, btn) {
-    const el = document.getElementById(id);
-    const hidden = el.type === 'password';
-    el.type = hidden ? 'text' : 'password';
-    btn.textContent = hidden ? 'Hide' : 'Show';
-  }
-
-  // ── Secret generator ─────────────────────────────────────────────────────
-  function generateSecret() {
-    const bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    const el = document.getElementById('SUGGESTION_TOKEN_SECRET');
-    el.value = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-    onField(el);
-  }
-
-  // ── Secrets Manager link (region-aware) ──────────────────────────────────
-  function updateSmLink() {
-    const region = document.getElementById('AWS_REGION').value || 'us-east-2';
-    const link = document.getElementById('sm-link');
-    if (link) {
-      link.href = `https://console.aws.amazon.com/secretsmanager/home?region=${region}#/newSecret`;
-    }
-  }
-  function onRegionChange() { updateSmLink(); }
-
-  // ── localStorage persistence (v2, AWS_REGION excluded) ──────────────────
-  function saveState() {
-    const state = {};
-    ALL_TEXT_FIELDS.forEach(id => {
-      if (SKIP_PERSIST.has(id)) return;
-      const el = document.getElementById(id);
-      if (el) state[id] = el.value;
-    });
-    ALL_BOOL_FIELDS.forEach(id => {
-      const el = document.getElementById(id);
-      if (el) state[id] = el.checked;
-    });
-    state['_watchlist'] = watchlist;
-    state['_blocklist'] = blocklist;
-    state['_select_RISK_TOLERANCE'] = document.getElementById('RISK_TOLERANCE')
-      ? document.getElementById('RISK_TOLERANCE').value : 'moderate';
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(state)); } catch {}
-  }
-
-  function restoreState() {
-    let raw;
-    try { raw = localStorage.getItem(CACHE_KEY); } catch {}
-    if (!raw) return;
-    let state;
-    try { state = JSON.parse(raw); } catch { return; }
-
-    ALL_TEXT_FIELDS.forEach(id => {
-      if (SKIP_PERSIST.has(id) || !(id in state)) return;
-      const el = document.getElementById(id);
-      if (el) { el.value = state[id]; updateDot(id); }
-    });
-    ALL_BOOL_FIELDS.forEach(id => {
-      if (!(id in state)) return;
-      const el = document.getElementById(id);
-      if (el) el.checked = state[id];
-    });
-    if (state['_select_RISK_TOLERANCE']) {
-      const el = document.getElementById('RISK_TOLERANCE');
-      if (el) el.value = state['_select_RISK_TOLERANCE'];
-    }
-    if (Array.isArray(state['_watchlist'])) { watchlist = state['_watchlist']; renderChips(); }
-    if (Array.isArray(state['_blocklist'])) { blocklist = state['_blocklist']; renderChips(); }
-    updateKeysMeta();
-  }
-
-  // ── Import .env ──────────────────────────────────────────────────────────
-  function toggleImport() {
-    const body = document.getElementById('import-body');
-    const chevron = document.getElementById('import-chevron');
-    const open = body.classList.toggle('open');
-    chevron.classList.toggle('open', open);
-  }
-
-  function parseEnvText(text) {
-    const result = {};
-    for (const raw of text.split('\n')) {
-      const line = raw.trim();
-      if (!line || line.startsWith('#')) continue;
-      const eq = line.indexOf('=');
-      if (eq < 0) continue;
-      const key = line.slice(0, eq).trim();
-      let val = line.slice(eq + 1).trim();
-      // Strip surrounding quotes
-      if ((val.startsWith('"') && val.endsWith('"')) ||
-          (val.startsWith("'") && val.endsWith("'"))) {
-        val = val.slice(1, -1);
-      }
-      // Unescape \n back to real newlines for the RSA key textarea
-      val = val.replace(/\\n/g, '\n');
-      result[key] = val;
-    }
-    return result;
-  }
-
-  function importEnv() {
-    const text = document.getElementById('env-import-text').value;
-    const parsed = parseEnvText(text);
-
-    ALL_TEXT_FIELDS.forEach(id => {
-      if (id in parsed) {
-        const el = document.getElementById(id);
-        if (el) { el.value = parsed[id]; updateDot(id); }
-      }
-    });
-    ALL_BOOL_FIELDS.forEach(id => {
-      if (id in parsed) {
-        const el = document.getElementById(id);
-        if (el) el.checked = parsed[id].toLowerCase() === 'true';
-      }
-    });
-    if ('RISK_TOLERANCE' in parsed) {
-      const el = document.getElementById('RISK_TOLERANCE');
-      if (el) el.value = parsed['RISK_TOLERANCE'];
-    }
-    if ('WATCHLIST' in parsed && parsed['WATCHLIST'].trim()) {
-      watchlist = parsed['WATCHLIST'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
-      renderChips();
-    }
-    if ('BLACKLIST' in parsed && parsed['BLACKLIST'].trim()) {
-      blocklist = parsed['BLACKLIST'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
-      renderChips();
-    }
-    updateKeysMeta();
-    saveState();
-
-    // Collapse the import bar
-    document.getElementById('import-body').classList.remove('open');
-    document.getElementById('import-chevron').classList.remove('open');
-    document.getElementById('env-import-text').value = '';
-  }
-
-  function clearImport() {
-    document.getElementById('env-import-text').value = '';
-  }
-
-  // ── Chip / tag UI ────────────────────────────────────────────────────────
-  function renderChipList(containerId, list, isBlock) {
-    const wrap = document.getElementById(containerId);
-    if (!wrap) return;
-    // Remove all chips, keep the input
-    const input = wrap.querySelector('.chip-input-el');
-    wrap.innerHTML = '';
-    list.forEach(ticker => {
-      const chip = document.createElement('span');
-      chip.className = 'chip' + (isBlock ? ' block-chip' : '');
-      chip.innerHTML = `${ticker} <span class="chip-x" onclick="removeChip('${containerId}', '${ticker}')">×</span>`;
-      wrap.appendChild(chip);
-    });
-    wrap.appendChild(input);
-  }
-
-  function renderChips() {
-    renderChipList('watchlist-wrap', watchlist, false);
-    renderChipList('blocklist-wrap', blocklist, true);
-  }
-
-  function focusChipInput(inputId) {
-    const el = document.getElementById(inputId);
-    if (el) el.focus();
-  }
-
-  function chipKeydown(event, list, which) {
-    if (event.key === 'Enter' || event.key === ',') {
-      event.preventDefault();
-      const input = event.target;
-      const ticker = input.value.trim().toUpperCase().replace(/[^A-Z]/g, '');
-      if (ticker && !list.includes(ticker)) {
-        list.push(ticker);
-        renderChips();
-        saveState();
-      }
-      input.value = '';
-    } else if (event.key === 'Backspace' && event.target.value === '' && list.length > 0) {
-      list.pop();
-      renderChips();
-      saveState();
-    }
-  }
-
-  function chipInputChanged(el) {
-    // Allow comma-separated paste: "AAPL, MSFT, TSLA"
-    if (el.value.includes(',')) {
-      const tickers = el.value.split(',').map(t => t.trim().toUpperCase().replace(/[^A-Z]/g, '')).filter(Boolean);
-      const list = el.id === 'watchlist-input' ? watchlist : blocklist;
-      tickers.forEach(t => { if (t && !list.includes(t)) list.push(t); });
-      renderChips();
-      saveState();
-      el.value = '';
-    }
-  }
-
-  function removeChip(containerId, ticker) {
-    if (containerId === 'watchlist-wrap') {
-      const idx = watchlist.indexOf(ticker);
-      if (idx >= 0) watchlist.splice(idx, 1);
-    } else {
-      const idx = blocklist.indexOf(ticker);
-      if (idx >= 0) blocklist.splice(idx, 1);
-    }
-    renderChips();
-    saveState();
-  }
-
-  // ── Value helpers ────────────────────────────────────────────────────────
-  function val(id) {
-    const el = document.getElementById(id);
-    if (!el) return '';
-    if (el.type === 'checkbox') return el.checked ? 'true' : 'false';
-    return el.value.trim();
-  }
-
-  // ── .env builder ─────────────────────────────────────────────────────────
-  function buildEnv() {
-    const rsaRaw = document.getElementById('KALSHI_RSA_PRIVATE_KEY').value.trim();
-    const rsaLine = rsaRaw
-      ? `KALSHI_RSA_PRIVATE_KEY="${rsaRaw.replace(/\n/g, '\\n')}"`
-      : `# KALSHI_RSA_PRIVATE_KEY=  # store in AWS Secrets Manager`;
-
-    const wl = watchlist.join(',');
-    const bl = blocklist.join(',');
-
-    return [
-      '# ============================================================',
-      '# Sentinel — generated by setup wizard (docs/index.html)',
-      '# Place in the root of trader-bot/ alongside lambda_function.py',
-      '# https://github.com/RobKirkpatrick/trader-bot',
-      '# ============================================================',
-      '',
-      '# Broker',
-      `PUBLIC_API_SECRET=${val('PUBLIC_API_SECRET')}`,
-      `PUBLIC_ACCOUNT_ID=${val('PUBLIC_ACCOUNT_ID')}`,
-      '',
-      '# AWS',
-      `AWS_REGION=${val('AWS_REGION')}`,
-      `AWS_SECRET_NAME=${val('AWS_SECRET_NAME')}`,
-      `SNS_TOPIC_ARN=${val('SNS_TOPIC_ARN')}`,
-      `LAMBDA_FUNCTION_URL=${val('LAMBDA_FUNCTION_URL')}`,
-      '',
-      '# AI & market data',
-      `ANTHROPIC_API_KEY=${val('ANTHROPIC_API_KEY')}`,
-      `POLYGON_API_KEY=${val('POLYGON_API_KEY')}`,
-      `FINNHUB_API_KEY=${val('FINNHUB_API_KEY')}`,
-      `MARKETAUX_API_KEY=${val('MARKETAUX_API_KEY')}`,
-      `NEWS_API_KEY=${val('NEWS_API_KEY')}`,
-      `ALPHA_VANTAGE_API_KEY=${val('ALPHA_VANTAGE_API_KEY')}`,
-      '',
-      '# Kalshi (Carpet Bagger — optional)',
-      `KALSHI_API_KEY=${val('KALSHI_API_KEY')}`,
-      rsaLine,
-      '',
-      '# Security',
-      `SUGGESTION_TOKEN_SECRET=${val('SUGGESTION_TOKEN_SECRET')}`,
-      '',
-      '# Watchlist & blocklist',
-      `WATCHLIST=${wl}`,
-      `BLACKLIST=${bl}`,
-      '',
-      '# Risk profile',
-      `RISK_TOLERANCE=${val('RISK_TOLERANCE')}`,
-      `OPTIONS_CALLS_ENABLED=${val('OPTIONS_CALLS_ENABLED')}`,
-      `CARPET_BAGGER_ENABLED=${val('CARPET_BAGGER_ENABLED')}`,
-      `CARPET_BAGGER_MAX_POSITION=${val('CARPET_BAGGER_MAX_POSITION')}`,
-      '',
-      '# Feature toggles',
-      `REQUIRE_SELL_APPROVAL=${val('REQUIRE_SELL_APPROVAL')}`,
-      `TRADING_PAUSED=${val('TRADING_PAUSED')}`,
-      `TRADE_DEBUG=${val('TRADE_DEBUG')}`,
-    ].join('\n');
-  }
-
-  function renderPreview() {
-    document.getElementById('env-preview').textContent = buildEnv();
-  }
-
-  function downloadEnv() {
-    const blob = new Blob([buildEnv()], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = '.env';
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function copyEnv(btn) {
-    navigator.clipboard.writeText(buildEnv()).then(() => {
-      const orig = btn.textContent;
-      btn.textContent = 'Copied!';
-      setTimeout(() => btn.textContent = orig, 2000);
-    });
-  }
-
-  // ── Init ─────────────────────────────────────────────────────────────────
-  renderChips();
-  restoreState();
-  updateUI();
-</script>
 
 </body>
 </html>
