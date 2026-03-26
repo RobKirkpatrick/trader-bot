@@ -83,15 +83,32 @@
       border-radius: 2px;
       background: #e2e8f0;
       transition: background 0.25s;
+      cursor: pointer;
+      position: relative;
     }
-    .progress-pip.done   { background: #22c55e; }
-    .progress-pip.active { background: #0f172a; }
+    /* Larger click target */
+    .progress-pip::after {
+      content: '';
+      position: absolute;
+      inset: -10px 0;
+    }
+    .progress-pip:hover   { background: #94a3b8; }
+    .progress-pip.done    { background: #22c55e; }
+    .progress-pip.done:hover { background: #16a34a; }
+    .progress-pip.active  { background: #0f172a; }
+    .progress-pip.active:hover { background: #0f172a; }
     .progress-label {
       font-size: 0.72rem;
       font-weight: 600;
       color: #94a3b8;
       white-space: nowrap;
       margin-left: 10px;
+    }
+    .progress-step-name {
+      font-size: 0.72rem;
+      color: #64748b;
+      margin-top: 8px;
+      font-weight: 500;
     }
 
     /* ── Card ── */
@@ -618,18 +635,19 @@
   <div class="wizard-logo">Trader<span>Bot</span></div>
   <div class="wizard-meta" id="keys-meta">&nbsp;</div>
   <div class="progress-track">
-    <div class="progress-pip active" id="pip-0"></div>
-    <div class="progress-pip" id="pip-1"></div>
-    <div class="progress-pip" id="pip-2"></div>
-    <div class="progress-pip" id="pip-3"></div>
-    <div class="progress-pip" id="pip-4"></div>
-    <div class="progress-pip" id="pip-5"></div>
-    <div class="progress-pip" id="pip-6"></div>
-    <div class="progress-pip" id="pip-7"></div>
-    <div class="progress-pip" id="pip-8"></div>
-    <div class="progress-pip" id="pip-9"></div>
+    <div class="progress-pip active" id="pip-0" onclick="goToStep(0)"></div>
+    <div class="progress-pip" id="pip-1" onclick="goToStep(1)"></div>
+    <div class="progress-pip" id="pip-2" onclick="goToStep(2)"></div>
+    <div class="progress-pip" id="pip-3" onclick="goToStep(3)"></div>
+    <div class="progress-pip" id="pip-4" onclick="goToStep(4)"></div>
+    <div class="progress-pip" id="pip-5" onclick="goToStep(5)"></div>
+    <div class="progress-pip" id="pip-6" onclick="goToStep(6)"></div>
+    <div class="progress-pip" id="pip-7" onclick="goToStep(7)"></div>
+    <div class="progress-pip" id="pip-8" onclick="goToStep(8)"></div>
+    <div class="progress-pip" id="pip-9" onclick="goToStep(9)"></div>
     <span class="progress-label" id="progress-label">Step 1 of 10</span>
   </div>
+  <div class="progress-step-name" id="progress-step-name">Welcome</div>
 </div>
 
 <div class="card">
@@ -1053,6 +1071,18 @@
   // ── Constants ────────────────────────────────────────────────────────────
   const TOTAL = 10;
   const CACHE_KEY = 'sentinel_setup_v2';
+  const STEP_NAMES = [
+    'Welcome',
+    'Public.com',
+    'AWS Setup',
+    'AI & Market Data',
+    'Kalshi',
+    'Approval Token',
+    'Feature Toggles',
+    'Risk Profile',
+    'Watchlist & Block List',
+    'Save .env',
+  ];
   const SKIP_PERSIST = new Set(['AWS_REGION']);
 
   const KEY_FIELDS = [
@@ -1098,6 +1128,7 @@
     });
     document.getElementById('progress-label').textContent =
       `Step ${current + 1} of ${TOTAL}`;
+    document.getElementById('progress-step-name').textContent = STEP_NAMES[current];
     document.getElementById('btn-back').disabled = current === 0;
 
     const next = document.getElementById('btn-next');
@@ -1113,12 +1144,13 @@
     updateSmLink();
   }
 
-  function nextStep() {
-    if (current < TOTAL - 1) { current++; updateUI(); scrollTo({ top: 0, behavior: 'smooth' }); }
+  function goToStep(n) {
+    current = Math.max(0, Math.min(TOTAL - 1, n));
+    updateUI();
+    scrollTo({ top: 0, behavior: 'smooth' });
   }
-  function prevStep() {
-    if (current > 0) { current--; updateUI(); scrollTo({ top: 0, behavior: 'smooth' }); }
-  }
+  function nextStep() { goToStep(current + 1); }
+  function prevStep() { goToStep(current - 1); }
 
   // ── Key counter ──────────────────────────────────────────────────────────
   function updateKeysMeta() {
