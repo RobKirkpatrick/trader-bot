@@ -491,10 +491,7 @@
       counter-increment: steps;
       display: flex;
       gap: 14px;
-      margin-bottom: 16px;
-      font-size: 0.86rem;
-      line-height: 1.6;
-      color: #334155;
+      margin-bottom: 20px;
     }
     .steps-list li::before {
       content: counter(steps);
@@ -510,13 +507,27 @@
       flex-shrink: 0;
       margin-top: 2px;
     }
-    .steps-list li code {
+    .step-content {
+      flex: 1;
+      font-size: 0.86rem;
+      line-height: 1.65;
+      color: #334155;
+    }
+    .step-content p { margin-bottom: 8px; }
+    .step-content p:last-child { margin-bottom: 0; }
+    .step-content strong { color: #0f172a; }
+    .step-content em { color: #64748b; font-style: italic; }
+    .cmd {
+      display: block;
       background: #f1f5f9;
-      color: #0f172a;
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: 0.78rem;
+      border: 1px solid #e2e8f0;
+      border-radius: 7px;
+      padding: 8px 12px;
       font-family: 'Courier New', monospace;
+      font-size: 0.76rem;
+      color: #0f172a;
+      margin: 6px 0;
+      word-break: break-all;
     }
 
     /* ── Navigation ── */
@@ -999,30 +1010,34 @@
     </div>
     <p style="font-size:0.84rem;font-weight:700;margin-bottom:14px;color:#1e293b;">Next steps:</p>
     <ol class="steps-list">
-      <li>Confirm <code>.env</code> is in the root of your <code>trader-bot</code> directory.</li>
-      <li>
-        Install dependencies and verify everything loads:<br>
-        <code>python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt</code><br>
-        <code>python -c "import requests, anthropic, boto3, dotenv; print('OK')"</code>
-      </li>
-      <li>
-        <strong>Run a live test scan</strong> — hits your real API keys, shows scores for every watchlist ticker, but places no orders:<br>
-        <code>python test_scan.py</code><br>
-        You'll see buying power, open positions, and a scored table of every ticker. Rows marked <code>◄</code> would trade if the market were open.
-      </li>
-      <li>
-        <strong>Install the Claude skill</strong> (optional, for on-demand queries in VS Code):<br>
-        Open VS Code in the project root, then in the Claude Code panel run:<br>
-        <code>/install-github-app</code> — or add the skill path manually:<br>
-        <code>claude --add-dir public-sentiment-trader/</code><br>
-        Once installed, you can ask Claude things like <em>"run a sentiment scan"</em>, <em>"show my positions"</em>, or <em>"check risk limits"</em> and it will call the bot directly.
-      </li>
-      <li>
-        Upload secrets to AWS Secrets Manager for Lambda deployment:<br>
-        <code>aws secretsmanager create-secret --name trading-bot/secrets --secret-string file://.env</code>
-      </li>
-      <li>Run <code>./deploy.sh</code> to build the Lambda package and create all EventBridge schedules.</li>
-      <li>When making code changes during the day, use <a href="dev-mode.html">Dev Mode</a> to pause trading instantly.</li>
+      <li><div class="step-content">
+        <p>Confirm <code>.env</code> is in the root of your <code>trader-bot</code> directory.</p>
+      </div></li>
+      <li><div class="step-content">
+        <p>Install dependencies and verify everything loads:</p>
+        <code class="cmd">python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt</code>
+        <code class="cmd">python -c "import requests, anthropic, boto3, dotenv; print('OK')"</code>
+      </div></li>
+      <li><div class="step-content">
+        <p><strong>Run a live test scan</strong> — hits your real API keys, scores every watchlist ticker, places no orders:</p>
+        <code class="cmd">python test_scan.py</code>
+        <p>You'll see buying power, open positions, and a scored table. Rows marked <code>◄</code> would trade if the market were open.</p>
+      </div></li>
+      <li><div class="step-content">
+        <p><strong>Install the Claude skill</strong> — optional, enables on-demand queries from VS Code. Open the project in VS Code, then add the skill directory:</p>
+        <code class="cmd">claude --add-dir public-sentiment-trader/</code>
+        <p>Then ask Claude things like <em>"run a sentiment scan"</em>, <em>"show my positions"</em>, or <em>"check risk limits"</em>.</p>
+      </div></li>
+      <li><div class="step-content">
+        <p>Upload secrets to AWS Secrets Manager for Lambda:</p>
+        <code class="cmd">aws secretsmanager create-secret --name trading-bot/secrets --secret-string file://.env</code>
+      </div></li>
+      <li><div class="step-content">
+        <p>Run <code>./deploy.sh</code> to build the Lambda package and create all EventBridge schedules.</p>
+      </div></li>
+      <li><div class="step-content">
+        <p>When making code changes during the day, use <a href="dev-mode.html">Dev Mode</a> to pause trading instantly.</p>
+      </div></li>
     </ol>
   </div>
 
