@@ -289,7 +289,7 @@ Takes effect on the next Lambda invocation. No redeploy needed.
 
 ## Carpet Bagger (Kalshi Sports)
 
-An optional strategy that trades Kalshi prediction markets on in-game sports outcomes. **The goal is to generate enough to cover the bot's compute costs** (AWS Lambda, Claude API) — so Sentinel effectively runs for free. The Kalshi float is kept small ($50–$100) and profits are withdrawn regularly, leaving only a working float at risk.
+An optional strategy that trades [Kalshi](https://kalshi.com/sign-up/?referral=e3a9d32f-df5c-41bb-85ec-2a2b6077d552&m=true) prediction markets on in-game sports outcomes. **The goal is to generate enough to cover the bot's compute costs** (AWS Lambda, Claude API) — so Sentinel effectively runs for free. The Kalshi float is kept small ($50–$100) and profits are withdrawn regularly, leaving only a working float at risk.
 
 **Thesis**: When a pre-game favorite is winning mid-game, Kalshi markets briefly underreact — implied probability spikes above fair value for a short window. The bot buys at 80–90% implied probability, targeting a take-profit exit at 90–93% (sport-dependent), with a stop-loss if the odds deteriorate.
 
@@ -352,7 +352,7 @@ deploy.sh                       Build + deploy Lambda + upsert EventBridge sched
 | [MarketAux](https://www.marketaux.com) | Entity-level news sentiment | 100 req/day |
 | [NewsAPI](https://newsapi.org) | Macro headline scoring | 100 req/day |
 | [Alpha Vantage](https://www.alphavantage.co) | Earnings calendar | 25 req/day |
-| [Kalshi](https://kalshi.com) | Sports prediction markets | Required for Carpet Bagger |
+| [Kalshi](https://kalshi.com/sign-up/?referral=e3a9d32f-df5c-41bb-85ec-2a2b6077d552&m=true) | Sports prediction markets | Required for Carpet Bagger |
 
 ApeWisdom (WSB pulse) requires no API key.
 
