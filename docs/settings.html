@@ -511,6 +511,12 @@
     <div class="field">
       <label><span class="field-dot" id="dot-AWS_SECRET_NAME"></span>Secrets Manager Secret Name <span class="badge badge-required">required</span></label>
       <input type="text" id="AWS_SECRET_NAME" value="trading-bot/secrets" placeholder="trading-bot/secrets" oninput="onField(this)">
+      <p class="hint">
+        Your Lambda can't read a local <code>.env</code> — it pulls all keys from Secrets Manager at runtime.
+        After saving your <code>.env</code>, upload it once with:<br><br>
+        <code>aws secretsmanager create-secret --name trading-bot/secrets --secret-string file://.env</code><br><br>
+        Leave the default unless you've already created a secret with a different name.
+      </p>
     </div>
     <div class="field">
       <label><span class="field-dot" id="dot-SNS_TOPIC_ARN"></span>SNS Topic ARN <span class="badge badge-required">required</span></label>

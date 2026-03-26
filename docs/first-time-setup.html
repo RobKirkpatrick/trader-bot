@@ -671,7 +671,12 @@
     <div class="field">
       <label><span class="field-dot" id="dot-AWS_SECRET_NAME"></span>Secrets Manager Secret Name <span class="badge badge-required">required</span></label>
       <input type="text" id="AWS_SECRET_NAME" value="trading-bot/secrets" placeholder="trading-bot/secrets" oninput="onField(this)">
-      <p class="hint">The name of the secret that holds all your API keys at runtime. Default matches what <code>deploy.sh</code> expects.</p>
+      <p class="hint">
+        Your Lambda function can't read a local <code>.env</code> file — it pulls all keys from Secrets Manager at runtime.
+        After saving your <code>.env</code> on the last step, upload it once with:<br><br>
+        <code>aws secretsmanager create-secret --name trading-bot/secrets --secret-string file://.env</code><br><br>
+        Leave the default unless you've already created a secret with a different name.
+      </p>
     </div>
     <div class="field">
       <label><span class="field-dot" id="dot-SNS_TOPIC_ARN"></span>SNS Topic ARN <span class="badge badge-required">required</span></label>
