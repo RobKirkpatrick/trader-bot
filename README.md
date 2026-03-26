@@ -144,15 +144,19 @@ Once your `.env` is ready, proceed with the steps below.
 ```bash
 git clone https://github.com/RobKirkpatrick/trader-bot
 cd trader-bot
-code .                                          # open in VS Code
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env                            # fill in your keys
+./setup.sh          # creates .venv, installs deps, copies .env.example → .env
+```
+
+`setup.sh` handles Python version checking, venv creation, and dependency install in one step. Safe to re-run.
+
+**VS Code tip:** If you see *"terminal environment injection is disabled"*, add this to your VS Code User Settings (`Cmd+Shift+P` → Open User Settings JSON) so `.env` vars are auto-loaded in every terminal:
+```json
+"python.terminal.useEnvFile": true
 ```
 
 **Verify your setup (no API keys needed):**
 ```bash
-python -c "import requests, anthropic, boto3, dotenv; print('✅ All dependencies installed')"
+source .venv/bin/activate && python3 test_scan.py
 ```
 
 Then use Claude Code with the `public-sentiment-trader/` skill directory.

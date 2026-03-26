@@ -1033,9 +1033,10 @@
         <p>Confirm <code>.env</code> is in the root of your <code>trader-bot</code> directory.</p>
       </div></li>
       <li><div class="step-content">
-        <p>Install dependencies and verify everything loads:</p>
-        <code class="cmd">python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt</code>
-        <code class="cmd">python -c "import requests, anthropic, boto3, dotenv; print('OK')"</code>
+        <p>Run the one-step setup script (creates <code>.venv</code>, installs dependencies):</p>
+        <code class="cmd">./setup.sh</code>
+        <code class="cmd">source .venv/bin/activate</code>
+        <p class="hint">If VS Code shows <em>"terminal environment injection is disabled"</em>, open User Settings JSON (<code>Cmd+Shift+P</code> → Open User Settings JSON) and add:<br><code>"python.terminal.useEnvFile": true</code><br>This auto-loads your <code>.env</code> into every VS Code terminal.</p>
       </div></li>
       <li><div class="step-content">
         <p><strong>Run a live test scan</strong> — hits your real API keys, scores every watchlist ticker, places no orders:</p>
