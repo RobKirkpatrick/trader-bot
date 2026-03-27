@@ -1,0 +1,109 @@
+# ============================================================
+# Sentinel — Environment Variables
+# Use the setup wizard at docs/index.html for guided setup.
+# Copy this file to .env and fill in your values manually,
+# or generate a filled .env directly from the wizard.
+# NEVER commit .env to version control.
+# ============================================================
+
+# ----------------------------------------------------------
+# Public.com (REQUIRED)
+# Generate at: public.com → Account Settings → Security → API
+# ----------------------------------------------------------
+PUBLIC_API_SECRET=your_public_api_key_here
+PUBLIC_ACCOUNT_ID=your_account_id_here        # e.g. 5OP12345
+
+# ----------------------------------------------------------
+# Anthropic (REQUIRED — Claude agent trade decisions)
+# Get at: console.anthropic.com
+# ----------------------------------------------------------
+ANTHROPIC_API_KEY=sk-ant-...
+
+# ----------------------------------------------------------
+# Market data sources (at least one required)
+# All have free tiers sufficient for the bot
+# ----------------------------------------------------------
+
+# Polygon.io — news sentiment + previous close data
+# Free: https://polygon.io (unlimited historical, 5 req/min)
+POLYGON_API_KEY=your_polygon_key_here
+
+# Finnhub — pre-computed news sentiment + EPS surprises
+# Free: https://finnhub.io (60 req/min, no daily cap)
+FINNHUB_API_KEY=your_finnhub_key_here
+
+# MarketAux — entity-level news sentiment
+# Free: https://www.marketaux.com (100 req/day)
+MARKETAUX_API_KEY=your_marketaux_key_here
+
+# NewsAPI — macro headline scoring via Claude
+# Free: https://newsapi.org (100 req/day)
+NEWS_API_KEY=your_newsapi_key_here
+
+# Alpha Vantage — earnings calendar (earnings proximity modifier)
+# Free: https://www.alphavantage.co (25 req/day)
+ALPHA_VANTAGE_API_KEY=your_av_key_here
+
+# ----------------------------------------------------------
+# AWS (required for autonomous Lambda deployment)
+# ----------------------------------------------------------
+AWS_REGION=us-east-2
+AWS_SECRET_NAME=trading-bot/secrets           # Secrets Manager secret name
+SNS_TOPIC_ARN=arn:aws:sns:us-east-2:YOUR_ACCOUNT:Sentinel
+
+# Human-in-the-loop approval links (HMAC-signed emails)
+SUGGESTION_TOKEN_SECRET=your_random_secret_here   # generate: openssl rand -hex 32
+LAMBDA_FUNCTION_URL=https://YOUR_API_GATEWAY_URL  # API Gateway URL for /approve endpoint
+
+# ----------------------------------------------------------
+# Watchlist & Blocklist
+# ----------------------------------------------------------
+
+# WATCHLIST — comma-separated list of tickers to scan.
+# Leave blank to use the hardcoded defaults in config/settings.py.
+WATCHLIST=AAPL,MSFT,TSLA,NVDA,AMD,META,AMZN,GOOGL,SPY,QQQ,IWM,XLE,OXY,BAC,PLTR,SNAP,PFE,RIVN
+
+# BLACKLIST — comma-separated tickers permanently excluded from scanning and trading.
+# Useful for tickers you hold long-term and never want the bot to touch.
+BLACKLIST=
+
+# ----------------------------------------------------------
+# User risk profile (optional — sensible defaults provided)
+# ----------------------------------------------------------
+
+# Risk tolerance: conservative | moderate | aggressive
+RISK_TOLERANCE=moderate
+
+# Enable/disable call option orders
+OPTIONS_CALLS_ENABLED=true
+
+# Require human approval before any sell executes (recommended while getting started)
+REQUIRE_SELL_APPROVAL=false
+
+# Kill switch — set true to halt ALL trading immediately (no redeploy needed)
+TRADING_PAUSED=false
+
+# ----------------------------------------------------------
+# Carpet Bagger — Kalshi sports prediction markets (optional)
+# ----------------------------------------------------------
+CARPET_BAGGER_ENABLED=true
+CARPET_BAGGER_MAX_POSITION=1.00   # max $ per game (avoid overnight lockup)
+
+# Kalshi API credentials — get at kalshi.com → Settings → API
+KALSHI_API_KEY=your_kalshi_api_key_here
+
+# RSA private key: paste as a single quoted line with \n for newlines
+KALSHI_RSA_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nMIIEo...\n-----END RSA PRIVATE KEY-----"
+
+# ----------------------------------------------------------
+# Macro position monitor (EOD email — optional)
+# If you manually placed a stock + call thesis trade, the EOD
+# email will include live P&L for it. Set the tickers here.
+# ----------------------------------------------------------
+MACRO_TRADE_STOCK_TICKER=XLE   # stock leg ticker (default XLE)
+MACRO_TRADE_CALL_TICKER=OXY    # call option underlying (default OXY)
+
+# ----------------------------------------------------------
+# Debug / internal
+# ----------------------------------------------------------
+TRADE_DEBUG=false    # true = SNS alert on every agent decision (verbose)

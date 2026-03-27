@@ -1,4 +1,4 @@
-# Sentinel
+# Public.com // TraderBot
 
 *Six signal sources. One score. Your call.*
 
