@@ -348,6 +348,29 @@ class PublicClient:
         resp.raise_for_status()
         return resp.json().get("orders", [])
 
+    def edit_order(
+        self,
+        order_id: str,
+        quantity: str | None = None,
+        limit_price: str | None = None,
+    ) -> dict:
+        """Edit a live order in place (no cancel/replace) for eligible asset classes (Equities, Options, Crypto)."""
+        account_id = self.get_account_id()
+        url = f"{self._BASE}/userapigateway/trading/{account_id}/order/{order_id}/edit"
+
+        body: dict = {}
+        if quantity is not None:
+            body["quantity"] = quantity
+        if limit_price is not None:
+            body["limitPrice"] = limit_price
+
+        logger.info("Editing order %s | quantity=%s limitPrice=%s", order_id, quantity, limit_price)
+        resp = requests.post(url, headers=self._headers(), json=body, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        logger.info("Order edited: %s", result)
+        return result
+
     # ------------------------------------------------------------------
     # Options
     # ------------------------------------------------------------------

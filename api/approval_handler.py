@@ -15,6 +15,7 @@ Response: HTML page (rendered in the browser when the user clicks the link).
 
 import hashlib
 import hmac
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -182,6 +183,17 @@ def _html_response(body: str, status: int = 200) -> dict:
         "statusCode": status,
         "headers": {"Content-Type": "text/html; charset=utf-8"},
         "body": body,
+    }
+
+
+def _json_response(data, status: int = 200) -> dict:
+    return {
+        "statusCode": status,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+        },
+        "body": json.dumps(data),
     }
 
 
@@ -649,6 +661,51 @@ def _handle_options_approval(params: dict) -> dict:
 # Main handler
 # ---------------------------------------------------------------------------
 
+def _check_bearer(event: dict) -> bool:
+    """Return True if the request carries a valid Bearer token."""
+    auth = (event.get("headers") or {}).get("authorization", "")
+    secret = settings.SUGGESTION_TOKEN_SECRET or ""
+    return bool(secret) and auth == f"Bearer {secret}"
+
+
+def _handle_orders(event: dict) -> dict:
+    """Return open orders as JSON. Requires Bearer token matching SUGGESTION_TOKEN_SECRET."""
+    if not _check_bearer(event):
+        return _json_response({"error": "Unauthorized"}, status=401)
+
+    try:
+        orders = PublicClient().get_orders(status="open")
+    except Exception as exc:
+        logger.error("Failed to fetch open orders: %s", exc)
+        return _json_response({"error": str(exc)}, status=500)
+
+    return _json_response({"orders": orders})
+
+
+def _handle_edit_order(event: dict, order_id: str) -> dict:
+    """Edit a live order in place. Requires Bearer token."""
+    if not _check_bearer(event):
+        return _json_response({"error": "Unauthorized"}, status=401)
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except (ValueError, TypeError):
+        return _json_response({"error": "Invalid JSON body"}, status=400)
+
+    quantity = body.get("quantity")
+    limit_price = body.get("limitPrice")
+    if not quantity and not limit_price:
+        return _json_response({"error": "Provide quantity or limitPrice"}, status=400)
+
+    try:
+        result = PublicClient().edit_order(order_id, quantity=quantity, limit_price=limit_price)
+    except Exception as exc:
+        logger.error("Failed to edit order %s: %s", order_id, exc)
+        return _json_response({"error": str(exc)}, status=500)
+
+    return _json_response(result)
+
+
 def handle_approval(event: dict) -> dict:
     """
     Handle an HTTP GET approval request.
@@ -656,6 +713,15 @@ def handle_approval(event: dict) -> dict:
     Single:  /approve?ticker=AAPL&dollars=3.00&expires=...&token=...
     Batch:   /approve?batch=AAPL:3.00,ITA:5.00&expires=...&token=...
     """
+    # Route orders API
+    raw_path = event.get("rawPath", "")
+    if raw_path == "/orders":
+        return _handle_orders(event)
+    if raw_path.startswith("/orders/") and raw_path.endswith("/edit"):
+        order_id = raw_path[len("/orders/"):-len("/edit")]
+        if order_id:
+            return _handle_edit_order(event, order_id)
+
     params = event.get("queryStringParameters") or {}
 
     # Route batch approvals

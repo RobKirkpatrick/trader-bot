@@ -58,6 +58,21 @@ Each ticker gets a blended score from **−1.0** (very bearish) to **+1.0** (ver
 | ≥ 0.35 | Strong bullish | Email HMAC-signed call option approval link |
 | ≥ 0.25 | Bullish | Buy stock at market |
 | ≤ −0.20 | Bearish (ETFs only) | Bearish signal logged — no auto-sell |
+
+---
+
+## New: In-Place Order Editing (2026)
+
+Public.com now supports true in-place order editing for Equities, Options, and Crypto. This allows you to modify eligible live orders (e.g., increase size at the same limit price) without cancel-and-replace, retaining queue position and reducing latency.
+
+**How to use:**
+
+```
+order_id = ...  # ID of your open order
+client.edit_order(order_id, quantity="2", limit_price="100.00")
+```
+
+See `broker/public_client.py` for details. This is now preferred over cancel/replace for supported asset classes.
 | Between | Neutral | No action |
 
 For call option approvals, clicking the email link:
