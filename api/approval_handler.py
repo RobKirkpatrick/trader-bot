@@ -676,6 +676,20 @@ def _check_bearer(event: dict) -> bool:
     return bool(secret) and auth == f"Bearer {secret}"
 
 
+def _handle_balance(event: dict) -> dict:
+    """Return account balance as JSON. Requires Bearer token."""
+    if not _check_bearer(event):
+        return _json_response({"error": "Unauthorized"}, status=401)
+
+    try:
+        balance = PublicClient().get_account_balance()
+    except Exception as exc:
+        logger.error("Failed to fetch balance: %s", exc)
+        return _json_response({"error": str(exc)}, status=500)
+
+    return _json_response(balance)
+
+
 def _handle_orders(event: dict) -> dict:
     """Return open orders as JSON. Requires Bearer token matching SUGGESTION_TOKEN_SECRET."""
     if not _check_bearer(event):
@@ -688,6 +702,44 @@ def _handle_orders(event: dict) -> dict:
         return _json_response({"error": str(exc)}, status=500)
 
     return _json_response({"orders": orders})
+
+
+def _handle_place_order(event: dict) -> dict:
+    """Place a new order. Requires Bearer token."""
+    if not _check_bearer(event):
+        return _json_response({"error": "Unauthorized"}, status=401)
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except (ValueError, TypeError):
+        return _json_response({"error": "Invalid JSON body"}, status=400)
+
+    symbol      = (body.get("symbol") or "").upper().strip()
+    side        = (body.get("side") or "").upper().strip()
+    order_type  = (body.get("orderType") or "MARKET").upper().strip()
+    amount      = body.get("amount")       # dollar amount (market buy)
+    quantity    = body.get("quantity")     # share quantity
+    limit_price = body.get("limitPrice")
+
+    if not symbol or side not in ("BUY", "SELL"):
+        return _json_response({"error": "symbol and side (BUY/SELL) are required"}, status=400)
+    if not amount and not quantity:
+        return _json_response({"error": "Provide amount (dollars) or quantity (shares)"}, status=400)
+
+    try:
+        result = PublicClient().place_order(
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            amount=str(amount) if amount else None,
+            quantity=str(quantity) if quantity else None,
+            limit_price=str(limit_price) if limit_price else None,
+        )
+    except Exception as exc:
+        logger.error("Failed to place order %s %s: %s", side, symbol, exc)
+        return _json_response({"error": str(exc)}, status=500)
+
+    return _json_response(result, status=201)
 
 
 def _handle_edit_order(event: dict, order_id: str) -> dict:
@@ -727,8 +779,12 @@ def handle_approval(event: dict) -> dict:
 
     # Route orders API
     raw_path = event.get("rawPath", "")
+    if raw_path == "/balance":
+        return _handle_balance(event)
     if raw_path == "/orders":
         return _handle_orders(event)
+    if raw_path == "/orders/new":
+        return _handle_place_order(event)
     if raw_path.startswith("/orders/") and raw_path.endswith("/edit"):
         order_id = raw_path[len("/orders/"):-len("/edit")]
         if order_id:

@@ -393,7 +393,7 @@ INT_ID=$(aws apigatewayv2 create-integration \
     --query IntegrationId --output text)
 
 # Upsert routes (idempotent — create-route is a no-op if it already exists)
-for ROUTE_KEY in "GET /approve" "GET /orders" "POST /orders/{orderId}/edit"; do
+for ROUTE_KEY in "GET /approve" "GET /balance" "GET /orders" "POST /orders/new" "POST /orders/{orderId}/edit"; do
     aws apigatewayv2 create-route \
         --api-id "${API_ID}" \
         --route-key "${ROUTE_KEY}" \
