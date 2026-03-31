@@ -20,8 +20,9 @@ DEPLOY_DIR="$(pwd)"
 # Build in /tmp to avoid iCloud Drive sync interference
 BUILD_DIR="/tmp/trader-bot-build"
 PACKAGE_ZIP="/tmp/trader-bot.zip"
-# S3 bucket for deployment uploads (avoids Lambda 22MB direct-upload limit)
-DEPLOY_BUCKET="trading-bot-deploy-${ACCOUNT_ID}"  # set ACCOUNT_ID env var or replace with your S3 bucket name
+# Resolve AWS account ID early (needed for S3 bucket name and IAM ARNs)
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+DEPLOY_BUCKET="trading-bot-deploy-${ACCOUNT_ID}"
 
 echo "=== Trading Bot Deploy ==="
 echo "Function : ${FUNCTION_NAME}"
@@ -134,8 +135,6 @@ LAMBDA_ARN=$(aws lambda get-function \
     --region "${REGION}" \
     --query "Configuration.FunctionArn" \
     --output text)
-
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
 # Grant the Lambda execution role permission to read its own CloudWatch logs
 # (needed for EOD recap — _fetch_todays_log_events pulls today's scan events)
