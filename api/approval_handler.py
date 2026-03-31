@@ -186,15 +186,23 @@ def _html_response(body: str, status: int = 200) -> dict:
     }
 
 
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+}
+
+
 def _json_response(data, status: int = 200) -> dict:
     return {
         "statusCode": status,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-        },
+        "headers": {"Content-Type": "application/json", **_CORS_HEADERS},
         "body": json.dumps(data),
     }
+
+
+def _cors_preflight() -> dict:
+    return {"statusCode": 204, "headers": _CORS_HEADERS, "body": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +721,10 @@ def handle_approval(event: dict) -> dict:
     Single:  /approve?ticker=AAPL&dollars=3.00&expires=...&token=...
     Batch:   /approve?batch=AAPL:3.00,ITA:5.00&expires=...&token=...
     """
+    # Handle CORS preflight
+    if event.get("requestContext", {}).get("http", {}).get("method") == "OPTIONS":
+        return _cors_preflight()
+
     # Route orders API
     raw_path = event.get("rawPath", "")
     if raw_path == "/orders":
