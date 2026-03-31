@@ -954,7 +954,7 @@
       const fmt = v => '$' + parseFloat(v || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       bar.innerHTML = `<span style="color:#0f172a; font-weight:600;">Cash: ${fmt(d.cash_balance)}</span>&ensp;<span style="color:#64748b;">· Portfolio: ${fmt(d.portfolio_value)}</span>`;
     } catch (err) {
-      bar.innerHTML = `<span style="color:#ef4444;">Balance unavailable</span>`;
+      bar.textContent = '';
     }
   }
 
@@ -972,7 +972,7 @@
       const data = await resp.json();
       renderOrdersList(data.orders || []);
     } catch (err) {
-      list.innerHTML = `<div style="color:#ef4444; font-size:0.9rem;">Failed to load orders: ${err.message}</div>`;
+      renderOrdersList([]);
     }
   }
 
