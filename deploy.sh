@@ -393,13 +393,24 @@ INT_ID=$(aws apigatewayv2 create-integration \
     --region "${REGION}" \
     --query IntegrationId --output text)
 
-# Upsert the GET /approve route
-aws apigatewayv2 create-route \
+# Upsert routes (idempotent — create-route is a no-op if it already exists)
+for ROUTE_KEY in "GET /approve" "GET /orders" "POST /orders/{orderId}/edit"; do
+    aws apigatewayv2 create-route \
+        --api-id "${API_ID}" \
+        --route-key "${ROUTE_KEY}" \
+        --target "integrations/${INT_ID}" \
+        --region "${REGION}" \
+        --output text > /dev/null 2>&1 || true
+    echo "    Route: ${ROUTE_KEY}"
+done
+
+# Configure CORS — required so the settings UI can call /orders with Authorization header
+aws apigatewayv2 update-api \
     --api-id "${API_ID}" \
-    --route-key "GET /approve" \
-    --target "integrations/${INT_ID}" \
+    --cors-configuration \
+      "AllowOrigins='*',AllowHeaders='Authorization,Content-Type',AllowMethods='GET,POST,OPTIONS'" \
     --region "${REGION}" \
-    --output text > /dev/null 2>&1 || true
+    --output text > /dev/null && echo "    CORS configured on API Gateway"
 
 # Ensure a $default stage exists with auto-deploy
 aws apigatewayv2 create-stage \
