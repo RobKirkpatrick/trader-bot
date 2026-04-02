@@ -1435,23 +1435,31 @@ def _get_today_buy_symbols(account_equity: float = 0.0) -> set[str] | None:
     try:
         db    = _dynamodb()
         today = date.today().isoformat()   # "2026-03-06"
-        resp  = db.scan(
-            TableName=_LOG_TABLE,
-            FilterExpression="begins_with(#ts, :today) AND action_taken = :action",
-            ExpressionAttributeNames={"#ts": "timestamp"},
-            ExpressionAttributeValues={
+        scan_kwargs = {
+            "TableName": _LOG_TABLE,
+            "FilterExpression": "begins_with(#ts, :today) AND action_taken = :action",
+            "ExpressionAttributeNames": {"#ts": "timestamp"},
+            "ExpressionAttributeValues": {
                 ":today":  {"S": today},
                 ":action": {"S": "order_placed"},
             },
-            ProjectionExpression="symbol",
-        )
+            "ProjectionExpression": "symbol",
+        }
         result: set[str] = set()
-        for item in resp.get("Items", []):
-            sym = item.get("symbol", {}).get("S", "").upper()
-            if sym:
-                m = re.match(r'^([A-Z]+)', sym)
-                if m:
-                    result.add(m.group(1))
+        last_key = None
+        while True:
+            if last_key:
+                scan_kwargs["ExclusiveStartKey"] = last_key
+            resp = db.scan(**scan_kwargs)
+            for item in resp.get("Items", []):
+                sym = item.get("symbol", {}).get("S", "").upper()
+                if sym:
+                    m = re.match(r'^([A-Z]+)', sym)
+                    if m:
+                        result.add(m.group(1))
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
         logger.info("PDT guard: %d symbol(s) bought today: %s", len(result), result or "none")
         return result
     except Exception as exc:
@@ -1829,10 +1837,20 @@ def run_edgar_scan() -> dict:
         logger.info("EDGAR scan: no 8-K filings found for watchlist today")
         return {"window": "edgar_scan", "filings_found": 0, "acted_on": 0}
 
-    high_impact = [s for s in edgar_signals.values() if s["priority"]]
+    # Filter to filings not yet processed — prevents re-alerting every 5 min for the same filing
+    new_edgar_signals = {
+        ticker: sig for ticker, sig in edgar_signals.items()
+        if not _edgar_already_processed(sig["accession_number"])
+    }
+
+    if not new_edgar_signals:
+        logger.info("EDGAR scan: %d filing(s) found, all already processed", len(edgar_signals))
+        return {"window": "edgar_scan", "filings_found": len(edgar_signals), "acted_on": 0}
+
+    high_impact = [s for s in new_edgar_signals.values() if s["priority"]]
     logger.info(
-        "EDGAR scan: %d filings found, %d high-impact",
-        len(edgar_signals), len(high_impact),
+        "EDGAR scan: %d filings found, %d new, %d new high-impact",
+        len(edgar_signals), len(new_edgar_signals), len(high_impact),
     )
 
     buying_power = account_balance.get("cash_balance", 0.0)
@@ -1843,6 +1861,7 @@ def run_edgar_scan() -> dict:
         ticker = sig["ticker"]
         accno  = sig["accession_number"]
 
+        # Already guarded by new_edgar_signals filter above, but keep as safety net
         if _edgar_already_processed(accno):
             logger.info("EDGAR: %s (%s) already processed — skipping", ticker, accno)
             continue
@@ -1879,31 +1898,35 @@ def run_edgar_scan() -> dict:
             except Exception:
                 pass
 
-    # EDGAR SNS summary
-    if edgar_signals:
-        lines = [
-            "EDGAR 8-K Monitor",
-            f"Filings found: {len(edgar_signals)}  |  High-impact: {len(high_impact)}",
-            "",
-        ]
-        for ticker, sig in edgar_signals.items():
-            icon = "!" if sig["priority"] else " "
-            lines.append(
-                f" {icon} {ticker}: {sig['catalyst']} (score {sig['score']:.1f}) "
-                f"items={sig['items']} direction={sig['direction']}"
-            )
-        if trade_results:
-            lines += ["", "EDGAR TRADES:"]
-            for tr in trade_results:
-                lines.append(f"  {tr['ticker']}: {tr['action']} — {tr.get('reason','')}")
-        try:
-            subject = (
-                f"[TraderBot] EDGAR: {len(high_impact)} high-impact 8-K"
-                + ("s" if len(high_impact) != 1 else "")
-            )
-            _publish_sns("\n".join(lines), subject=subject)
-        except Exception as exc:
-            logger.warning("EDGAR SNS failed: %s", exc)
+    # Mark non-high-impact new signals as processed so they don't re-appear in every scan
+    for sig in new_edgar_signals.values():
+        if not sig["priority"]:
+            _mark_edgar_processed(sig["accession_number"])
+
+    # EDGAR SNS summary — only fires once per filing (new_edgar_signals already filtered)
+    lines = [
+        "EDGAR 8-K Monitor",
+        f"New filings: {len(new_edgar_signals)}  |  High-impact: {len(high_impact)}",
+        "",
+    ]
+    for ticker, sig in new_edgar_signals.items():
+        icon = "!" if sig["priority"] else " "
+        lines.append(
+            f" {icon} {ticker}: {sig['catalyst']} (score {sig['score']:.1f}) "
+            f"items={sig['items']} direction={sig['direction']}"
+        )
+    if trade_results:
+        lines += ["", "EDGAR TRADES:"]
+        for tr in trade_results:
+            lines.append(f"  {tr['ticker']}: {tr['action']} — {tr.get('reason','')}")
+    try:
+        subject = (
+            f"[TraderBot] EDGAR: {len(high_impact)} high-impact 8-K"
+            + ("s" if len(high_impact) != 1 else "")
+        )
+        _publish_sns("\n".join(lines), subject=subject)
+    except Exception as exc:
+        logger.warning("EDGAR SNS failed: %s", exc)
 
     acted = sum(1 for tr in trade_results if tr["action"] == "order_placed")
     return {
@@ -1991,7 +2014,26 @@ def run_end_of_day_scan(
         logger.info("EOD position sample keys: %s", list(positions[0].keys()))
 
     # PDT guard: don't stop-loss close positions opened today (would create a day-trade round trip)
-    today_buys = _get_today_buy_symbols(portfolio_value) or set()   # empty set = no buys logged = safe to close all
+    today_buys = _get_today_buy_symbols(portfolio_value)
+    if today_buys is None:
+        # DynamoDB unavailable — we can't safely determine which positions were bought today.
+        # Block all EOD closes rather than risk a day-trade violation.
+        logger.warning("PDT guard: DynamoDB unavailable — skipping all EOD closes to prevent day-trade violations")
+        today_buys = set()  # profit-taking / stop-loss loops check membership; set them to skip via the flag below
+        _eod_pdt_blocked = True
+    else:
+        _eod_pdt_blocked = False
+
+    if _eod_pdt_blocked:
+        # Can't determine today's buys — skip all closes to avoid potential day trades
+        logger.warning("PDT guard: skipping EOD profit-take and stop-loss passes (DynamoDB unavailable)")
+        return {
+            "window":             "end_of_day",
+            "positions_reviewed": len(positions),
+            "closed":             0,
+            "pending_approval":   0,
+            "pdt_blocked":        True,
+        }
 
     # Options profit-taking: close positions up ≥ 50% or ≤ 14 DTE remaining
     profit_takes = _evaluate_options_profit_taking(positions, client, today_buys)

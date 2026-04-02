@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TraderBot — Sell All Positions</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0d0d0d;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 5rem 2rem 2rem;
+    }
+
+    /* ── Page nav ── */
+    .page-nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      background: #0a0a0a;
+      border-bottom: 1px solid #1a1a1a;
+      display: flex;
+      justify-content: center;
+      padding: 0 16px;
+      z-index: 10;
+    }
+    .page-nav-inner { display: flex; gap: 0; }
+    .page-nav a {
+      padding: 12px 16px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: #444;
+      text-decoration: none;
+      letter-spacing: 0.03em;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .page-nav a:hover { color: #888; }
+    .page-nav a.active { color: #ef4444; border-bottom-color: #ef4444; }
+
+    .wordmark {
+      font-size: 0.75rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: #555;
+      margin-bottom: 2.5rem;
+    }
+
+    .card {
+      background: #141414;
+      border: 1px solid #222;
+      border-radius: 16px;
+      padding: 2.5rem 3rem;
+      max-width: 560px;
+      width: 100%;
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #888;
+      margin-bottom: 0.4rem;
+    }
+
+    .subtitle {
+      font-size: 0.8rem;
+      color: #444;
+      margin-bottom: 2rem;
+    }
+
+    /* Warning banner */
+    .warning {
+      background: #1a0a0a;
+      border: 1px solid #7f1d1d;
+      border-radius: 10px;
+      padding: 0.9rem 1.2rem;
+      font-size: 0.78rem;
+      color: #fca5a5;
+      line-height: 1.5;
+      margin-bottom: 2rem;
+      text-align: left;
+    }
+    .warning strong { color: #ef4444; }
+
+    /* Mode toggle */
+    .mode-toggle {
+      display: flex;
+      background: #0a0a0a;
+      border: 1px solid #222;
+      border-radius: 10px;
+      padding: 4px;
+      margin-bottom: 1.5rem;
+      gap: 4px;
+    }
+    .mode-btn {
+      flex: 1;
+      padding: 0.55rem;
+      border: none;
+      border-radius: 7px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      background: transparent;
+      color: #555;
+    }
+    .mode-btn.active-dry  { background: #1e3a2e; color: #3ddc84; }
+    .mode-btn.active-live { background: #3a1e1e; color: #ef4444; }
+
+    /* Command area */
+    .cmd-section { text-align: left; }
+
+    .cmd-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: #555;
+      margin-bottom: 0.5rem;
+    }
+
+    .cmd-box {
+      background: #0a0a0a;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 1rem 1.2rem;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.8rem;
+      color: #b0c4de;
+      white-space: pre-wrap;
+      word-break: break-all;
+      line-height: 1.6;
+    }
+    .cmd-box.live { color: #fca5a5; border-color: #7f1d1d; }
+
+    .copy-btn {
+      margin-top: 0.75rem;
+      width: 100%;
+      padding: 0.65rem;
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #ccc;
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .copy-btn:hover { background: #2a2a2a; color: #fff; }
+    .copy-btn.copied { background: #1a3a1a; border-color: #3ddc84; color: #3ddc84; }
+
+    .mode-desc {
+      font-size: 0.75rem;
+      color: #555;
+      margin-top: 1rem;
+      line-height: 1.5;
+      text-align: left;
+    }
+    .mode-desc.live { color: #7f1d1d; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid #1e1e1e;
+      margin: 2rem 0;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .footer-links a {
+      font-size: 0.75rem;
+      color: #444;
+      text-decoration: none;
+      transition: color 0.15s;
+    }
+    .footer-links a:hover { color: #888; }
+  </style>
+</head>
+<body>
+
+  <nav class="page-nav">
+    <div class="page-nav-inner">
+      <a href="first-time-setup.html">Setup Wizard</a>
+      <a href="settings.html">Settings</a>
+      <a href="dev-mode.html">Dev Mode</a>
+      <a href="sell-all.html" class="active">Sell All</a>
+    </div>
+  </nav>
+
+  <div class="wordmark">TraderBot</div>
+
+  <div class="card">
+    <h1>Sell All Positions</h1>
+    <p class="subtitle">Market-sell every open position immediately.</p>
+
+    <div class="warning">
+      <strong>Irreversible.</strong> Live mode places real market sell orders for every open position at once.
+      Run dry run first to confirm what will be sold, then switch to live.
+    </div>
+
+    <div class="mode-toggle">
+      <button class="mode-btn active-dry" id="dryBtn" onclick="setMode('dry')">DRY RUN</button>
+      <button class="mode-btn" id="liveBtn" onclick="setMode('live')">LIVE — PLACE ORDERS</button>
+    </div>
+
+    <div class="cmd-section">
+      <div class="cmd-label">Run this command in your terminal</div>
+      <div class="cmd-box" id="cmdBox"></div>
+      <button class="copy-btn" id="copyBtn" onclick="copyCmd()">Copy command</button>
+      <p class="mode-desc" id="modeDesc"></p>
+    </div>
+
+    <hr class="divider">
+
+    <div class="footer-links">
+      <a href="dev-mode.html">Dev Mode (pause trading)</a>
+      <a href="index.html">Home</a>
+    </div>
+  </div>
+
+  <script>
+    let mode = 'dry';
+
+    const DRY_CMD  = 'python public-sentiment-trader/scripts/sell_all.py';
+    const LIVE_CMD = 'python public-sentiment-trader/scripts/sell_all.py --confirm';
+
+    function setMode(m) {
+      mode = m;
+      const cmdBox  = document.getElementById('cmdBox');
+      const dryBtn  = document.getElementById('dryBtn');
+      const liveBtn = document.getElementById('liveBtn');
+      const desc    = document.getElementById('modeDesc');
+      const copyBtn = document.getElementById('copyBtn');
+
+      copyBtn.classList.remove('copied');
+
+      if (m === 'dry') {
+        cmdBox.textContent  = DRY_CMD;
+        cmdBox.className    = 'cmd-box';
+        dryBtn.className    = 'mode-btn active-dry';
+        liveBtn.className   = 'mode-btn';
+        desc.textContent    = 'Prints every position that would be sold. No orders are placed.';
+        desc.className      = 'mode-desc';
+        copyBtn.textContent = 'Copy dry-run command';
+      } else {
+        cmdBox.textContent  = LIVE_CMD;
+        cmdBox.className    = 'cmd-box live';
+        dryBtn.className    = 'mode-btn';
+        liveBtn.className   = 'mode-btn active-live';
+        desc.textContent    = 'Places a real market SELL order for every open position. Cannot be undone.';
+        desc.className      = 'mode-desc live';
+        copyBtn.textContent = 'Copy live command';
+      }
+    }
+
+    function copyCmd() {
+      const text = document.getElementById('cmdBox').textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.textContent = mode === 'dry' ? 'Copy dry-run command' : 'Copy live command';
+        }, 2000);
+      });
+    }
+
+    setMode('dry');
+  </script>
+</body>
+</html>
