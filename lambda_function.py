@@ -152,8 +152,9 @@ def handler(event: dict, context) -> dict:  # noqa: ANN001
         from api.approval_handler import handle_approval  # noqa: PLC0415
         return handle_approval(event)
 
-    # 3. Kill switch — set TRADING_PAUSED=true in Secrets Manager to halt all trades immediately
-    if os.environ.get("TRADING_PAUSED", "false").lower() == "true":
+    # 3. Kill switch — set TRADING_PAUSED=true in .env or Secrets Manager to halt all trades immediately
+    from config.settings import settings  # noqa: PLC0415
+    if settings.TRADING_PAUSED:
         logger.warning("TRADING_PAUSED=true — skipping all scan windows. No orders will be placed.")
         return {"statusCode": 200, "body": '{"status": "paused"}'}
 
@@ -195,11 +196,118 @@ def handler(event: dict, context) -> dict:  # noqa: ANN001
         elif window == "carpet_bagger_baseball_exit":
             from carpet_bagger.monitor import baseball_exit as cb_baseball_exit  # noqa: PLC0415
             result = cb_baseball_exit(cfg=event)
+        elif window == "bracket_buster_scout":
+            import asyncio  # noqa: PLC0415
+            from bracket_buster import scout as bb_scout  # noqa: PLC0415
+            from carpet_bagger.kalshi_client import KalshiClient  # noqa: PLC0415
+            from config.settings import settings as _s  # noqa: PLC0415
+            _bb_kalshi = KalshiClient(api_key=_s.KALSHI_API_KEY, rsa_private_key_pem=_s.KALSHI_RSA_PRIVATE_KEY)
+            _bb_ddb    = boto3.resource("dynamodb", region_name=_s.AWS_REGION)
+            _bb_sns    = boto3.client("sns", region_name="us-east-1")
+            result = asyncio.run(bb_scout.run(
+                kalshi_client=_bb_kalshi,
+                dynamodb_client=_bb_ddb,
+                sns_client=_bb_sns,
+                test_mode=not os.environ.get("BRACKET_BUSTER_ENABLED", "false").lower() == "true",
+            ))
+        elif window == "bracket_buster_monitor":
+            import asyncio  # noqa: PLC0415
+            from bracket_buster import monitor as bb_monitor  # noqa: PLC0415
+            from carpet_bagger.kalshi_client import KalshiClient  # noqa: PLC0415
+            from config.settings import settings as _s  # noqa: PLC0415
+            _bb_kalshi = KalshiClient(api_key=_s.KALSHI_API_KEY, rsa_private_key_pem=_s.KALSHI_RSA_PRIVATE_KEY)
+            _bb_ddb    = boto3.resource("dynamodb", region_name=_s.AWS_REGION)
+            _bb_sns    = boto3.client("sns", region_name="us-east-1")
+            result = asyncio.run(bb_monitor.run(
+                kalshi_client=_bb_kalshi,
+                dynamodb_client=_bb_ddb,
+                sns_client=_bb_sns,
+                test_mode=not os.environ.get("BRACKET_BUSTER_ENABLED", "false").lower() == "true",
+            ))
         elif window == "edgar_scan":
             from scheduler.jobs import run_edgar_scan  # noqa: PLC0415
             result = run_edgar_scan()
+        elif window == "macro_trader_scanner":
+            import asyncio  # noqa: PLC0415
+            from macro_trader.scanner import run as _mt_scanner  # noqa: PLC0415
+            if not settings.MACRO_TRADER_ENABLED:
+                result = {"status": "disabled", "window": "macro_trader_scanner"}
+            else:
+                result = asyncio.run(_mt_scanner())
+        elif window == "macro_trader_monitor":
+            import asyncio  # noqa: PLC0415
+            from macro_trader.monitor import run as _mt_monitor  # noqa: PLC0415
+            if not settings.MACRO_TRADER_ENABLED:
+                result = {"status": "disabled", "window": "macro_trader_monitor"}
+            else:
+                result = asyncio.run(_mt_monitor())
+        elif window == "funding_rate_scanner":
+            from funding_rate.lambda_handlers import handler_scanner as _fr_scanner  # noqa: PLC0415
+            result = _fr_scanner(event, context)
+        elif window == "funding_rate_monitor":
+            from funding_rate.lambda_handlers import handler_monitor as _fr_monitor  # noqa: PLC0415
+            result = _fr_monitor(event, context)
+        elif window == "political_trader_scanner":
+            import asyncio  # noqa: PLC0415
+            from political_trader.scanner import PoliticalMarketScanner  # noqa: PLC0415
+            from political_trader.signal_reader import PoliticalSignalReader  # noqa: PLC0415
+            import political_trader.scanner as _pt_scanner_mod  # noqa: PLC0415
+            import political_trader.monitor as _pt_monitor_mod  # noqa: PLC0415
+            from carpet_bagger.kalshi_client import KalshiClient  # noqa: PLC0415
+            if not settings.POLITICAL_TRADER_ENABLED:
+                result = {"status": "disabled", "window": "political_trader_scanner"}
+            else:
+                _pt_scanner_mod.SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
+                _pt_monitor_mod.SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
+                _pt_kalshi = KalshiClient(api_key=settings.KALSHI_API_KEY, rsa_private_key_pem=settings.KALSHI_RSA_PRIVATE_KEY)
+                _pt_reader  = PoliticalSignalReader(kalshi_client=_pt_kalshi)
+                _pt_scanner = PoliticalMarketScanner(_pt_kalshi, _pt_reader)
+                result = asyncio.run(_pt_scanner.run())
+        elif window == "political_trader_monitor":
+            import asyncio  # noqa: PLC0415
+            from political_trader.monitor import PoliticalMonitor  # noqa: PLC0415
+            from political_trader.signal_reader import PoliticalSignalReader  # noqa: PLC0415
+            import political_trader.scanner as _pt_scanner_mod  # noqa: PLC0415
+            import political_trader.monitor as _pt_monitor_mod  # noqa: PLC0415
+            from carpet_bagger.kalshi_client import KalshiClient  # noqa: PLC0415
+            if not settings.POLITICAL_TRADER_ENABLED:
+                result = {"status": "disabled", "window": "political_trader_monitor"}
+            else:
+                _pt_scanner_mod.SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
+                _pt_monitor_mod.SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN", "")
+                _pt_kalshi  = KalshiClient(api_key=settings.KALSHI_API_KEY, rsa_private_key_pem=settings.KALSHI_RSA_PRIVATE_KEY)
+                _pt_reader  = PoliticalSignalReader(kalshi_client=_pt_kalshi)
+                _pt_monitor = PoliticalMonitor(_pt_kalshi, _pt_reader)
+                result = asyncio.run(_pt_monitor.run())
+        elif window == "weather_trader_scanner":
+            import asyncio  # noqa: PLC0415
+            from weather_trader.scanner import run_scanner as _wt_scanner  # noqa: PLC0415
+            from carpet_bagger.kalshi_client import KalshiClient  # noqa: PLC0415
+            if not settings.WEATHER_TRADER_ENABLED:
+                result = {"status": "disabled", "window": "weather_trader_scanner"}
+            else:
+                _wt_kalshi = KalshiClient(api_key=settings.KALSHI_API_KEY, rsa_private_key_pem=settings.KALSHI_RSA_PRIVATE_KEY)
+                _wt_ddb    = boto3.resource("dynamodb", region_name=settings.AWS_REGION)
+                _wt_sns    = boto3.client("sns", region_name="us-east-1")
+                result = asyncio.run(_wt_scanner(kalshi_client=_wt_kalshi, dynamo_client=_wt_ddb, sns_client=_wt_sns))
+        elif window == "weather_trader_monitor":
+            import asyncio  # noqa: PLC0415
+            from weather_trader.monitor import run_monitor as _wt_monitor  # noqa: PLC0415
+            from carpet_bagger.kalshi_client import KalshiClient  # noqa: PLC0415
+            if not settings.WEATHER_TRADER_ENABLED:
+                result = {"status": "disabled", "window": "weather_trader_monitor"}
+            else:
+                _wt_kalshi = KalshiClient(api_key=settings.KALSHI_API_KEY, rsa_private_key_pem=settings.KALSHI_RSA_PRIVATE_KEY)
+                _wt_ddb    = boto3.resource("dynamodb", region_name=settings.AWS_REGION)
+                _wt_sns    = boto3.client("sns", region_name="us-east-1")
+                result = asyncio.run(_wt_monitor(kalshi_client=_wt_kalshi, dynamo_client=_wt_ddb, sns_client=_wt_sns))
         else:
-            result = run_midday_scan()
+            logger.error(
+                "Unknown window '%s' — refusing to run default scan. "
+                "Add a handler in lambda_function.py or remove the EventBridge schedule.",
+                window,
+            )
+            result = {"status": "unknown_window", "window": window, "orders_placed": 0}
     except Exception as exc:
         logger.error("Scan failed: %s", exc, exc_info=True)
         return _error_response(f"Scan failed: {exc}")

@@ -143,6 +143,122 @@ def get_macro_sentiment() -> dict:
     return score_macro_sentiment(headlines)
 
 
+_FULL_SIGNAL_SYSTEM = """You are a macroeconomic analyst assessing short-term US market conditions.
+
+Analyze the provided headlines and return a JSON object with component scores for each macro domain.
+
+Respond ONLY with a JSON object — no markdown, no prose:
+
+{
+  "overall_score": <float -1.0 to 1.0>,
+  "fed_signal": <float -1.0 to 1.0>,
+  "inflation_signal": <float -1.0 to 1.0>,
+  "employment_signal": <float -1.0 to 1.0>,
+  "gdp_signal": <float -1.0 to 1.0>,
+  "confidence": <float 0.0 to 1.0>,
+  "summary": "<one sentence>"
+}
+
+Scoring guide:
+- overall_score: blended macro sentiment (-1=very bearish, +1=very bullish)
+- fed_signal: Fed policy direction (-1=hiking/hawkish, +1=cutting/dovish)
+- inflation_signal: inflation trend (-1=rising/hot, +1=falling/cooling)
+- employment_signal: labor market (-1=deteriorating, +1=strong)
+- gdp_signal: growth outlook (-1=recession risk, +1=expansion)
+- confidence: how much the headlines directly address each domain (0=guessing, 1=clear signal)
+
+Use 0.0 for any domain where headlines provide no direct information."""
+
+
+def get_full_macro_signal(anthropic_api_key: str | None = None) -> dict:
+    """
+    Fetch headlines and ask Claude for the full structured macro signal.
+
+    Returns a dict with all fields the macro_trader scanner expects:
+      overall_score, fed_signal, inflation_signal, employment_signal,
+      gdp_signal, confidence, headline_count, summary, generated_at
+
+    Also writes the signal to DynamoDB macro-signal-cache (bridge for macro_trader).
+    """
+    import json as _json
+    from datetime import datetime as _dt
+
+    api_key = anthropic_api_key or settings.ANTHROPIC_API_KEY
+    headlines = fetch_macro_headlines()
+    headline_count = len(headlines)
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    if headlines:
+        headlines_text = "\n".join(f"- {h}" for h in headlines[:60])
+        user_content = f"Recent news headlines:\n\n{headlines_text}"
+    else:
+        user_content = (
+            "No live headlines available. Assess current macro conditions based on "
+            "recent Fed policy, inflation trends, labor market data, and GDP outlook."
+        )
+
+    defaults = {
+        "overall_score": 0.0, "fed_signal": 0.0, "inflation_signal": 0.0,
+        "employment_signal": 0.0, "gdp_signal": 0.0, "confidence": 0.5,
+        "summary": "Macro signal unavailable.",
+    }
+
+    try:
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=_FULL_SIGNAL_SYSTEM,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        raw = message.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        result = _json.loads(raw)
+        # Clamp floats
+        for key in ("overall_score", "fed_signal", "inflation_signal", "employment_signal", "gdp_signal"):
+            result[key] = max(-1.0, min(1.0, float(result.get(key, 0.0))))
+        result["confidence"] = max(0.0, min(1.0, float(result.get("confidence", 0.5))))
+    except Exception as exc:
+        logger.error("Full macro signal Claude call failed: %s", exc)
+        result = defaults.copy()
+
+    result["headline_count"] = headline_count
+    result["generated_at"] = _dt.utcnow().isoformat() + "Z"
+
+    logger.info(
+        "Full macro signal: overall=%.2f fed=%.2f inflation=%.2f employment=%.2f gdp=%.2f conf=%.2f",
+        result["overall_score"], result["fed_signal"], result["inflation_signal"],
+        result["employment_signal"], result["gdp_signal"], result["confidence"],
+    )
+
+    _cache_macro_signal(result)
+    return result
+
+
+def _cache_macro_signal(signal: dict) -> None:
+    """Write macro signal to DynamoDB macro-signal-cache for macro_trader to read."""
+    import boto3 as _boto3
+    import os as _os
+    from datetime import datetime as _dt
+
+    try:
+        table_name = _os.getenv("MACRO_SIGNAL_CACHE_TABLE", "macro-signal-cache")
+        table = _boto3.resource("dynamodb").Table(table_name)
+        signal_date = _dt.utcnow().date().isoformat()
+        # DynamoDB won't store Python floats — stringify them
+        item = {"signal_date": signal_date}
+        for k, v in signal.items():
+            item[k] = str(v) if isinstance(v, float) else v
+        table.put_item(Item=item)
+        logger.info("Cached macro signal for %s → %s", signal_date, table_name)
+    except Exception as exc:
+        logger.warning("Failed to cache macro signal (non-fatal): %s", exc)
+
+
 _CLAUDE_TICKER_SYSTEM = """You are a short-term equity trader. Some market data sources are unavailable.
 Based on intraday price movements and any macro context provided, give a short-term sentiment
 score for each ticker.

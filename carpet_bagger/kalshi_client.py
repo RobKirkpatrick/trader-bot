@@ -66,6 +66,8 @@ class KalshiClient:
     @staticmethod
     def _load_key(pem: str):
         from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        # Normalize PEM: strip outer quotes, convert literal \n to real newlines
+        pem = pem.strip().strip('"').strip("'").replace('\\n', '\n')
         return load_pem_private_key(pem.encode(), password=None)
 
     def _sign(self, method: str, path: str) -> dict:
@@ -287,6 +289,37 @@ class KalshiClient:
         )
         result = self._request("POST", "/portfolio/orders", json=body)
         logger.info("Kalshi BUY result: %s", result)
+        return result
+
+    def place_no_buy(self, ticker: str, no_price_dollars: float, dollar_amount: float) -> dict:
+        """
+        Buy 'no' contracts (used by bracket_buster for the short leg of pure arbs).
+
+        Args:
+            ticker:           Kalshi market ticker
+            no_price_dollars: current no_ask in dollars (e.g. 0.40 = 1 - yes_bid)
+            dollar_amount:    dollars to deploy
+
+        Returns order response dict.
+        """
+        no_price_cents = int(round(no_price_dollars * 100))
+        count = max(1, int(dollar_amount / no_price_dollars))
+
+        body = {
+            "ticker":          ticker,
+            "side":            "no",
+            "action":          "buy",
+            "type":            "limit",
+            "count":           count,
+            "no_price":        no_price_cents,
+            "client_order_id": str(uuid.uuid4()),
+        }
+        logger.info(
+            "Kalshi BUY NO: %s | no_price=%dc ($%.2f) | count=%d | total~=$%.2f",
+            ticker, no_price_cents, no_price_dollars, count, count * no_price_dollars,
+        )
+        result = self._request("POST", "/portfolio/orders", json=body)
+        logger.info("Kalshi BUY NO result: %s", result)
         return result
 
     def cancel_order(self, order_id: str) -> dict:

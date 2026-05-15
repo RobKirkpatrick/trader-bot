@@ -291,12 +291,21 @@ def _handle_batch_approval(params: dict) -> dict:
     for trade in trades:
         ticker  = trade["ticker"]
         dollars = trade["dollars"]
+        if ticker.upper() in settings.BLACKLIST:
+            logger.warning("Batch approval blocked — %s is blacklisted", ticker)
+            results.append({"ticker": ticker, "dollars": dollars, "error": "blacklisted"})
+            continue
         logger.info("Batch approval: placing BUY $%.2f %s", dollars, ticker)
         try:
             order    = client.place_order(symbol=ticker, side="BUY", order_type="MARKET", amount=f"{dollars:.2f}")
             order_id = order.get("orderId", "unknown")
             results.append({"ticker": ticker, "dollars": dollars, "order_id": order_id})
             logger.info("Batch order placed: %s $%.2f | orderId=%s", ticker, dollars, order_id)
+            try:
+                from scheduler.jobs import _log_decision
+                _log_decision(ticker, {}, {}, "order_placed", order)
+            except Exception as _log_exc:
+                logger.warning("PDT log failed for batch buy %s: %s", ticker, _log_exc)
         except Exception as exc:
             logger.error("Batch order failed for %s: %s", ticker, exc)
             results.append({"ticker": ticker, "dollars": dollars, "error": str(exc)})
@@ -580,6 +589,12 @@ def _handle_options_approval(params: dict) -> dict:
             logger.error("Options call order failed for %s: %s", ticker, exc)
             return _html_response(_html_error(f"Order placement failed: {exc}"), status=500)
 
+        try:
+            from scheduler.jobs import _log_decision
+            _log_decision(opt_sym, {}, {}, "order_placed", order)
+        except Exception as _log_exc:
+            logger.warning("PDT log failed for options call %s: %s", opt_sym, _log_exc)
+
         contract_info = f"1 CALL · {ticker} ${strike_str} exp {expiration} @ ${chosen_mid:.2f}/share"
         logger.info("Options approval placed CALL %s @ $%.2f | orderId=%s", opt_sym, chosen_mid, order_id)
         _send_confirmation_sns(
@@ -648,6 +663,12 @@ def _handle_options_approval(params: dict) -> dict:
         logger.error("Put spread approval failed for %s: %s", ticker, exc)
         return _html_response(_html_error(f"Order placement failed: {exc}"), status=500)
 
+    try:
+        from scheduler.jobs import _log_decision
+        _log_decision(ticker, {}, {}, "order_placed", order)
+    except Exception as _log_exc:
+        logger.warning("PDT log failed for put spread %s: %s", ticker, _log_exc)
+
     contract_info = (
         f"{contracts}× PUT SPREAD · {ticker} ${long_strike}/${short_strike} "
         f"exp {expiration} @ ${net_debit:.2f} net debit"
@@ -696,7 +717,8 @@ def _handle_orders(event: dict) -> dict:
         return _json_response({"error": "Unauthorized"}, status=401)
 
     try:
-        orders = PublicClient().get_orders(status="open")
+        portfolio = PublicClient().get_portfolio()
+        orders = portfolio.get("orders") or []
     except Exception as exc:
         logger.error("Failed to fetch open orders: %s", exc)
         return _json_response({"error": str(exc)}, status=500)
@@ -726,6 +748,24 @@ def _handle_place_order(event: dict) -> dict:
     if not amount and not quantity:
         return _json_response({"error": "Provide amount (dollars) or quantity (shares)"}, status=400)
 
+    # PDT guard: block same-day sells via the Orders UI
+    if side == "SELL":
+        import re as _re
+        from scheduler.jobs import _get_today_buy_symbols
+        _base = _re.match(r'^([A-Z]+)', symbol)
+        _base = _base.group(1) if _base else symbol
+        today_buys = _get_today_buy_symbols(0.0)
+        if today_buys is None:
+            return _json_response(
+                {"error": "Sell blocked: trade history unavailable — PDT safety hold. Try again shortly."},
+                status=503,
+            )
+        if _base in today_buys:
+            return _json_response(
+                {"error": f"Sell blocked for {symbol}: position opened today. Selling same-day is a PDT round trip. Available tomorrow."},
+                status=403,
+            )
+
     try:
         result = PublicClient().place_order(
             symbol=symbol,
@@ -738,6 +778,14 @@ def _handle_place_order(event: dict) -> dict:
     except Exception as exc:
         logger.error("Failed to place order %s %s: %s", side, symbol, exc)
         return _json_response({"error": str(exc)}, status=500)
+
+    # Log buys to DynamoDB so PDT guard sees them in subsequent sell checks
+    if side == "BUY":
+        try:
+            from scheduler.jobs import _log_decision
+            _log_decision(symbol, {}, {}, "order_placed", result)
+        except Exception as _log_exc:
+            logger.warning("PDT log failed for UI buy %s: %s", symbol, _log_exc)
 
     return _json_response(result, status=201)
 
@@ -766,6 +814,178 @@ def _handle_edit_order(event: dict, order_id: str) -> dict:
     return _json_response(result)
 
 
+# ---------------------------------------------------------------------------
+# Kill switch
+# ---------------------------------------------------------------------------
+
+def _verify_killswitch_token(action: str, token: str) -> bool:
+    """Return True if the kill-switch HMAC token is valid. No expiry — static bookmark URL."""
+    if not settings.SUGGESTION_TOKEN_SECRET:
+        return False
+    expected = hmac.new(
+        settings.SUGGESTION_TOKEN_SECRET.encode(),
+        f"killswitch:{action}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, token)
+
+
+def _handle_killswitch(params: dict) -> dict:
+    """Toggle TRADING_PAUSED via a bookmarked URL. No expiry."""
+    action = (params.get("action") or "").lower().strip()
+    token  = params.get("token", "")
+
+    if action not in ("pause", "resume"):
+        return _html_response(_html_error("Invalid kill-switch action."), status=400)
+    if not _verify_killswitch_token(action, token):
+        return _html_response(_html_error("Invalid kill-switch token."), status=403)
+
+    new_value = "true" if action == "pause" else "false"
+    label     = "PAUSED" if action == "pause" else "RESUMED"
+    emoji     = "🛑" if action == "pause" else "✅"
+
+    try:
+        import boto3 as _boto3
+        sm = _boto3.client("secretsmanager", region_name=settings.AWS_REGION)
+        secret_name = settings.AWS_SECRET_NAME
+        raw = sm.get_secret_value(SecretId=secret_name)["SecretString"]
+        secrets = json.loads(raw)
+        secrets["TRADING_PAUSED"] = new_value
+        sm.put_secret_value(SecretId=secret_name, SecretString=json.dumps(secrets))
+        logger.info("Kill switch: TRADING_PAUSED set to %s", new_value)
+    except Exception as exc:
+        logger.error("Kill switch Secrets Manager update failed: %s", exc)
+        return _html_response(_html_error(f"Failed to update Secrets Manager: {exc}"), status=500)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading {label} — TraderBot</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, sans-serif; max-width: 400px;
+            margin: 80px auto; padding: 24px; color: #111; text-align: center; }}
+    h2 {{ font-size: 2rem; margin-bottom: 8px; }}
+    p {{ color: #555; }}
+    .footer {{ color: #888; font-size: 0.8em; margin-top: 32px; }}
+  </style>
+</head>
+<body>
+  <h2>{emoji} Trading {label}</h2>
+  <p>TRADING_PAUSED = <strong>{new_value}</strong></p>
+  <p>Takes effect on the next Lambda invocation (within 1 minute).</p>
+  <p class="footer">TraderBot</p>
+</body>
+</html>"""
+    return _html_response(html)
+
+
+# ---------------------------------------------------------------------------
+# Settings panel (cloud mode)
+# ---------------------------------------------------------------------------
+
+# Keys that are safe to read/write via the settings panel.
+# Excludes raw private keys — those must be set via deploy.sh / Secrets Manager console.
+_SETTINGS_READABLE = {
+    "TRADING_PAUSED", "REQUIRE_SELL_APPROVAL", "TRADE_DEBUG",
+    "RISK_TOLERANCE",
+    "OPTIONS_CALLS_ENABLED",
+    "CARPET_BAGGER_ENABLED", "CARPET_BAGGER_MAX_POSITION",
+    "BRACKET_BUSTER_ENABLED", "BRACKET_BUSTER_MAX_POSITION",
+    "MACRO_TRADER_ENABLED", "MACRO_TRADER_MAX_POSITION",
+    "MACRO_TRADER_MIN_SIGNAL", "MACRO_TRADER_MIN_CONFIDENCE",
+    "MACRO_TRADER_MIN_EDGE", "MACRO_TRADER_MAX_BID_ASK_SPREAD",
+    "POLITICAL_TRADER_ENABLED", "POLITICAL_TRADER_MAX_POSITION",
+    "POLITICAL_TRADER_MIN_SIGNAL", "POLITICAL_TRADER_MIN_CONFIDENCE",
+    "WEATHER_TRADER_ENABLED", "WEATHER_TRADER_MAX_POSITION", "WEATHER_TRADER_MIN_EDGE",
+    "FUNDING_RATE_ENABLED", "FUNDING_RATE_MAX_POSITION", "FUNDING_RATE_MIN_APR",
+    "CRYPTO_ENABLED",
+    "WATCHLIST_BEARISH", "WATCHLIST_BULLISH", "WATCHLIST_NEUTRAL", "BLACKLIST",
+    "SNS_TOPIC_ARN", "LAMBDA_FUNCTION_URL",
+}
+
+
+def _handle_settings_load(event: dict) -> dict:
+    """Return safe settings values from Secrets Manager as JSON."""
+    if not _check_bearer(event):
+        return _json_response({"error": "Unauthorized"}, status=401)
+    try:
+        import boto3 as _boto3
+        sm = _boto3.client("secretsmanager", region_name=settings.AWS_REGION)
+        raw = sm.get_secret_value(SecretId=settings.AWS_SECRET_NAME)["SecretString"]
+        secrets = json.loads(raw)
+        safe = {k: v for k, v in secrets.items() if k in _SETTINGS_READABLE}
+        return _json_response(safe)
+    except Exception as exc:
+        logger.error("Settings load failed: %s", exc)
+        return _json_response({"error": str(exc)}, status=500)
+
+
+def _handle_settings_save(event: dict) -> dict:
+    """Merge posted key/value pairs into Secrets Manager. Only whitelisted keys accepted."""
+    if not _check_bearer(event):
+        return _json_response({"error": "Unauthorized"}, status=401)
+    try:
+        body = json.loads(event.get("body") or "{}")
+    except (ValueError, TypeError):
+        return _json_response({"error": "Invalid JSON"}, status=400)
+
+    # Filter to only safe keys
+    updates = {k: str(v) for k, v in body.items() if k in _SETTINGS_READABLE}
+    if not updates:
+        return _json_response({"error": "No valid settings keys provided"}, status=400)
+
+    try:
+        import boto3 as _boto3
+        sm = _boto3.client("secretsmanager", region_name=settings.AWS_REGION)
+        raw = sm.get_secret_value(SecretId=settings.AWS_SECRET_NAME)["SecretString"]
+        secrets = json.loads(raw)
+        secrets.update(updates)
+        sm.put_secret_value(SecretId=settings.AWS_SECRET_NAME, SecretString=json.dumps(secrets))
+        logger.info("Settings saved: %s", list(updates.keys()))
+        return _json_response({"status": "saved", "keys": list(updates.keys())})
+    except Exception as exc:
+        logger.error("Settings save failed: %s", exc)
+        return _json_response({"error": str(exc)}, status=500)
+
+
+def _handle_settings_page(params: dict) -> dict:
+    """Serve settings.html with the cloud token embedded so the page can call the API."""
+    token = params.get("token", "")
+    if not settings.SUGGESTION_TOKEN_SECRET:
+        return _html_response(_html_error("SUGGESTION_TOKEN_SECRET not configured."), status=500)
+    expected = hmac.new(
+        settings.SUGGESTION_TOKEN_SECRET.encode(),
+        b"settings:page",
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, token):
+        return _html_response(_html_error("Invalid settings token."), status=403)
+
+    # Read the settings.html file packaged with the Lambda
+    import os as _os
+    html_path = _os.path.join(_os.path.dirname(__file__), "..", "docs", "settings.html")
+    try:
+        with open(html_path) as f:
+            html = f.read()
+    except FileNotFoundError:
+        return _html_response(_html_error("settings.html not found in deployment package."), status=500)
+
+    # Inject the bearer token so the page JS can call /settings/load and /settings/save
+    inject = f"""<script>
+  window._TRADERBOT_TOKEN = "{settings.SUGGESTION_TOKEN_SECRET}";
+  window._TRADERBOT_API_BASE = "{settings.LAMBDA_FUNCTION_URL}";
+  window._TRADERBOT_CLOUD_MODE = true;
+</script>"""
+    html = html.replace("</head>", inject + "\n</head>", 1)
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "text/html; charset=utf-8", **_CORS_HEADERS},
+        "body": html,
+    }
+
+
 def handle_approval(event: dict) -> dict:
     """
     Handle an HTTP GET approval request.
@@ -789,6 +1009,17 @@ def handle_approval(event: dict) -> dict:
         order_id = raw_path[len("/orders/"):-len("/edit")]
         if order_id:
             return _handle_edit_order(event, order_id)
+    if raw_path == "/killswitch":
+        return _handle_killswitch(event.get("queryStringParameters") or {})
+    if raw_path == "/settings":
+        method = (event.get("requestContext", {}).get("http", {}).get("method") or "GET").upper()
+        if method == "GET":
+            params = event.get("queryStringParameters") or {}
+            if "token" in params:
+                return _handle_settings_page(params)
+            return _handle_settings_load(event)
+        if method == "POST":
+            return _handle_settings_save(event)
 
     params = event.get("queryStringParameters") or {}
 
@@ -832,6 +1063,11 @@ def handle_approval(event: dict) -> dict:
         logger.warning("Token validation failed for %s $%.2f", ticker, dollars)
         return _html_response(_html_error(reason), status=403)
 
+    # Reject blacklisted tickers — even if the HMAC token is valid
+    if ticker.upper() in settings.BLACKLIST:
+        logger.warning("Approval blocked — %s is blacklisted", ticker)
+        return _html_response(_html_error(f"{ticker} is on the blacklist and cannot be traded."), status=403)
+
     # Fetch current price for display (informational — does not block the trade)
     current_price = _fetch_current_price(ticker)
 
@@ -842,6 +1078,11 @@ def handle_approval(event: dict) -> dict:
         order    = client.place_order(symbol=ticker, side="BUY", order_type="MARKET", amount=f"{dollars:.2f}")
         order_id = order.get("orderId", "unknown")
         logger.info("Approval order placed: BUY $%.2f %s | orderId=%s", dollars, ticker, order_id)
+        try:
+            from scheduler.jobs import _log_decision
+            _log_decision(ticker, {}, {}, "order_placed", order)
+        except Exception as _log_exc:
+            logger.warning("PDT log failed for approval buy %s: %s", ticker, _log_exc)
     except Exception as exc:
         logger.error("Approval order failed for %s: %s", ticker, exc)
         return _html_response(_html_error(f"Order placement failed: {exc}"), status=500)

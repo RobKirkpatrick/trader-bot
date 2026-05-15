@@ -28,6 +28,7 @@ import anthropic
 import boto3
 
 from config.settings import settings
+from sentiment.cftc_cot import fetch_cot_signal
 from sentiment.news_macro import fetch_macro_headlines
 
 logger = logging.getLogger(__name__)
@@ -213,6 +214,7 @@ def generate_suggestions(
     headlines: list[str],
     research_log: str = "",
     prices: dict[str, float] | None = None,
+    cot_context: str = "",
 ) -> list[dict]:
     """
     Call Claude Sonnet to generate 3 trade suggestions informed by today's research.
@@ -221,6 +223,7 @@ def generate_suggestions(
         headlines:    Macro news headlines from NewsAPI
         research_log: Today's CloudWatch log digest (signals, macro, trades)
         prices:       Optional dict of {ticker: current_price}
+        cot_context:  CFTC COT summary string (institutional positioning)
 
     Returns:
         List of dicts: [{"ticker": str, "rationale": str, "dollars": float}]
@@ -229,6 +232,9 @@ def generate_suggestions(
     system = _SUGGESTION_SYSTEM.format(universe=universe_str)
 
     parts = []
+
+    if cot_context:
+        parts.append(f"INSTITUTIONAL POSITIONING (CFTC COT):\n{cot_context}")
 
     if research_log:
         parts.append(f"TODAY'S TRADING RESEARCH LOG:\n{research_log}")
@@ -416,14 +422,26 @@ def run_suggestions_scan() -> dict:
     except Exception as exc:
         logger.info("Price fetch skipped (off-hours): %s", exc)
 
-    # 4. Generate suggestions via Claude Sonnet
-    suggestions = generate_suggestions(headlines, research_log=research_log, prices=prices or None)
+    # 4. Fetch CFTC COT institutional positioning (free, no key, ~3s)
+    cot_context = ""
+    try:
+        cot = fetch_cot_signal()
+        if cot:
+            cot_context = cot["summary"]
+            logger.info("CFTC COT: equity_tilt=%.3f, report_date=%s", cot["equity_tilt"], cot["report_date"])
+        else:
+            logger.info("CFTC COT: no data returned")
+    except Exception as exc:
+        logger.warning("CFTC COT fetch failed: %s", exc)
+
+    # 5. Generate suggestions via Claude Sonnet
+    suggestions = generate_suggestions(headlines, research_log=research_log, prices=prices or None, cot_context=cot_context)
 
     if not suggestions:
         logger.warning("No suggestions generated — skipping email")
         return {"window": "suggestions", "suggestions": 0}
 
-    # 5. Build and send email
+    # 6. Build and send email
     function_url = settings.LAMBDA_FUNCTION_URL
     secret       = settings.SUGGESTION_TOKEN_SECRET
 

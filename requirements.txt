@@ -16,3 +16,9 @@ anthropic==0.40.0
 
 # RSA signing for Kalshi API auth (carpet_bagger)
 cryptography>=42.0.0
+
+# Coinbase Advanced API auth (funding_rate module — JWT ES256)
+PyJWT>=2.8.0
+
+# Async HTTP client (funding_rate module)
+aiohttp>=3.9.0

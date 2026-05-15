@@ -470,6 +470,7 @@
     <a href="settings.html" class="active">Settings</a>
     <a href="#" id="orders-tab">Open Orders</a>
     <a href="dev-mode.html">Dev Mode</a>
+    <a href="sell-all.html">Sell All</a>
   </div>
 </nav>
 
@@ -551,7 +552,8 @@
 
 <!-- Save bar -->
 <div class="save-bar">
-  <button class="btn-save" onclick="saveEnv()">Save .env file</button>
+  <button class="btn-save" id="btn-cloud-save" onclick="saveToCloud(this)" style="display:none">Save to Cloud</button>
+  <button class="btn-save" id="btn-env-save" onclick="saveEnv()">Save .env file</button>
   <button class="btn-sm" onclick="copyEnv(this)">Copy to clipboard</button>
   <span class="save-status" id="save-status">Saved!</span>
 </div>
@@ -770,18 +772,34 @@
   <div class="section-body open" id="body-watchlist">
     <div class="ticker-search">
       <input class="ticker-search-input" id="ticker-search" type="text"
-             placeholder="Search by company name or ticker to add to watchlist…"
+             placeholder="Search by company name or ticker to add…"
              oninput="tickerSearch(this)" autocomplete="off">
       <div class="ticker-dropdown" id="ticker-dropdown"></div>
     </div>
 
     <div class="field">
-      <label>Watchlist</label>
-      <div class="chip-wrap" id="watchlist-wrap" onclick="focusChipInput('watchlist-input')">
-        <input class="chip-input-el" id="watchlist-input" placeholder="Type ticker + Enter to add"
-               onkeydown="chipKeydown(event, watchlist, 'watchlist')" oninput="chipInputChanged(this)">
+      <label>Bearish Tickers <span class="badge badge-optional">puts only</span></label>
+      <div class="chip-wrap" id="watchlist-bearish-wrap" onclick="focusChipInput('watchlist-bearish-input')">
+        <input class="chip-input-el" id="watchlist-bearish-input" placeholder="RIVN,INTC,SOFI…"
+               onkeydown="chipKeydown(event, watchlistBearish, 'watchlist-bearish')" oninput="chipInputChanged(this)">
       </div>
-      <p class="hint">Scanned on every Lambda run. Comma-paste supported.</p>
+      <p class="hint">Bot buys puts only when score &le; &minus;0.35. Never calls or stock buys.</p>
+    </div>
+    <div class="field">
+      <label>Bullish Tickers <span class="badge badge-optional">calls only</span></label>
+      <div class="chip-wrap" id="watchlist-bullish-wrap" onclick="focusChipInput('watchlist-bullish-input')">
+        <input class="chip-input-el" id="watchlist-bullish-input" placeholder="XLE,OXY,BNO…"
+               onkeydown="chipKeydown(event, watchlistBullish, 'watchlist-bullish')" oninput="chipInputChanged(this)">
+      </div>
+      <p class="hint">Bot buys calls or stock on bullish signals. Never puts.</p>
+    </div>
+    <div class="field">
+      <label>Neutral Tickers <span class="badge badge-optional">signal-driven</span></label>
+      <div class="chip-wrap" id="watchlist-neutral-wrap" onclick="focusChipInput('watchlist-neutral-input')">
+        <input class="chip-input-el" id="watchlist-neutral-input" placeholder="AAPL,MSFT,SPY…"
+               onkeydown="chipKeydown(event, watchlistNeutral, 'watchlist-neutral')" oninput="chipInputChanged(this)">
+      </div>
+      <p class="hint">Calls on bullish signals, puts on bearish (&le; &minus;0.35). Standard behavior.</p>
     </div>
     <div class="field">
       <label>Block List <span class="badge badge-optional">optional</span></label>
@@ -789,7 +807,7 @@
         <input class="chip-input-el" id="blocklist-input" placeholder="Type ticker + Enter to block"
                onkeydown="chipKeydown(event, blocklist, 'blocklist')" oninput="chipInputChanged(this)">
       </div>
-      <p class="hint">Excluded from all scanning and trade execution.</p>
+      <p class="hint">Excluded from all scanning and trade execution. Auto-sold if found in portfolio.</p>
     </div>
   </div>
 </div>
@@ -839,6 +857,216 @@
       <label>Max position per Kalshi game ($)</label>
       <input type="number" id="CARPET_BAGGER_MAX_POSITION" value="1.00" min="0.01" step="0.01" oninput="saveState()">
       <p class="hint">Maximum dollars risked per individual game.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Bracket Buster ── -->
+<div class="section" id="sec-bracket">
+  <div class="section-header open" onclick="toggleSection('bracket')">
+    <div class="section-title-wrap">
+      <span class="section-icon">🏆</span>
+      <div>
+        <div class="section-title">Bracket Buster <span style="font-size:0.75rem;font-weight:500;color:#94a3b8;">(Kalshi)</span></div>
+        <div class="section-subtitle">Tournament multi-tier prediction market strategy</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-bracket">▼</span>
+  </div>
+  <div class="section-body open" id="body-bracket">
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Enable Bracket Buster</strong>
+        <span>NBA playoffs / tournament arb on Kalshi multi-tier markets.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="BRACKET_BUSTER_ENABLED" onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label>Max position per arb ($)</label>
+      <input type="number" id="BRACKET_BUSTER_MAX_POSITION" value="10.00" min="0.01" step="0.01" oninput="saveState()">
+    </div>
+  </div>
+</div>
+
+<!-- ── Macro Trader ── -->
+<div class="section" id="sec-macro-trader">
+  <div class="section-header open" onclick="toggleSection('macro-trader')">
+    <div class="section-title-wrap">
+      <span class="section-icon">📊</span>
+      <div>
+        <div class="section-title">Macro Trader <span style="font-size:0.75rem;font-weight:500;color:#94a3b8;">(Kalshi)</span></div>
+        <div class="section-subtitle">Economic prediction market bridge (FOMC, CPI, jobs)</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-macro-trader">▼</span>
+  </div>
+  <div class="section-body open" id="body-macro-trader">
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Enable Macro Trader</strong>
+        <span>Trades Kalshi economic markets based on macro sentiment signals.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="MACRO_TRADER_ENABLED" onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label>Max position per market ($)</label>
+      <input type="number" id="MACRO_TRADER_MAX_POSITION" value="25.00" min="0.01" step="0.01" oninput="saveState()">
+    </div>
+    <div class="field">
+      <label>Min signal strength (0–1)</label>
+      <input type="number" id="MACRO_TRADER_MIN_SIGNAL" value="0.45" min="0" max="1" step="0.01" oninput="saveState()">
+    </div>
+    <div class="field">
+      <label>Min confidence (0–1)</label>
+      <input type="number" id="MACRO_TRADER_MIN_CONFIDENCE" value="0.60" min="0" max="1" step="0.01" oninput="saveState()">
+    </div>
+  </div>
+</div>
+
+<!-- ── Political Trader ── -->
+<div class="section" id="sec-political">
+  <div class="section-header open" onclick="toggleSection('political')">
+    <div class="section-title-wrap">
+      <span class="section-icon">🏛️</span>
+      <div>
+        <div class="section-title">Political Trader <span style="font-size:0.75rem;font-weight:500;color:#94a3b8;">(Kalshi)</span></div>
+        <div class="section-subtitle">Political prediction market strategy</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-political">▼</span>
+  </div>
+  <div class="section-body open" id="body-political">
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Enable Political Trader</strong>
+        <span>Trades Kalshi political markets based on news sentiment.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="POLITICAL_TRADER_ENABLED" onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label>Max position per market ($)</label>
+      <input type="number" id="POLITICAL_TRADER_MAX_POSITION" value="15.00" min="0.01" step="0.01" oninput="saveState()">
+    </div>
+    <div class="field">
+      <label>Min signal strength (0–1)</label>
+      <input type="number" id="POLITICAL_TRADER_MIN_SIGNAL" value="0.45" min="0" max="1" step="0.01" oninput="saveState()">
+    </div>
+    <div class="field">
+      <label>Min confidence (0–1)</label>
+      <input type="number" id="POLITICAL_TRADER_MIN_CONFIDENCE" value="0.60" min="0" max="1" step="0.01" oninput="saveState()">
+    </div>
+  </div>
+</div>
+
+<!-- ── Weather Trader ── -->
+<div class="section" id="sec-weather">
+  <div class="section-header open" onclick="toggleSection('weather')">
+    <div class="section-title-wrap">
+      <span class="section-icon">🌤️</span>
+      <div>
+        <div class="section-title">Weather Trader <span style="font-size:0.75rem;font-weight:500;color:#94a3b8;">(Kalshi)</span></div>
+        <div class="section-subtitle">NWS-edge weather prediction market strategy</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-weather">▼</span>
+  </div>
+  <div class="section-body open" id="body-weather">
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Enable Weather Trader</strong>
+        <span>Trades Kalshi weather markets using NWS forecast data.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="WEATHER_TRADER_ENABLED" onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label>Max position per market ($)</label>
+      <input type="number" id="WEATHER_TRADER_MAX_POSITION" value="20.00" min="0.01" step="0.01" oninput="saveState()">
+    </div>
+    <div class="field">
+      <label>Min edge required (0–1)</label>
+      <input type="number" id="WEATHER_TRADER_MIN_EDGE" value="0.10" min="0" max="1" step="0.01" oninput="saveState()">
+    </div>
+  </div>
+</div>
+
+<!-- ── Funding Rate / Coinbase ── -->
+<div class="section" id="sec-funding">
+  <div class="section-header open" onclick="toggleSection('funding')">
+    <div class="section-title-wrap">
+      <span class="section-icon">₿</span>
+      <div>
+        <div class="section-title">Funding Rate Arb <span style="font-size:0.75rem;font-weight:500;color:#94a3b8;">(Coinbase)</span></div>
+        <div class="section-subtitle">Delta-neutral crypto basis arb via Coinbase Advanced</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-funding">▼</span>
+  </div>
+  <div class="section-body open" id="body-funding">
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Enable Funding Rate Arb</strong>
+        <span>Spot-long / futures-short delta-neutral strategy on Coinbase.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="FUNDING_RATE_ENABLED" onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label>Max position size ($)</label>
+      <input type="number" id="FUNDING_RATE_MAX_POSITION" value="100.00" min="0.01" step="0.01" oninput="saveState()">
+    </div>
+    <div class="field">
+      <label>Min annualized rate to enter (e.g. 0.07 = 7%)</label>
+      <input type="number" id="FUNDING_RATE_MIN_APR" value="0.07" min="0" max="1" step="0.01" oninput="saveState()">
+    </div>
+    <div class="field">
+      <label>Coinbase API Key Name</label>
+      <input type="text" id="COINBASE_API_KEY_NAME" placeholder="organizations/xxx/apiKeys/yyy" oninput="saveState()">
+      <p class="hint">From Coinbase Advanced Trade → Settings → API → Create API Key.</p>
+    </div>
+    <div class="field">
+      <label>Coinbase EC Private Key</label>
+      <textarea id="COINBASE_PRIVATE_KEY" placeholder="-----BEGIN EC PRIVATE KEY-----&#10;MHcCAQEE...&#10;-----END EC PRIVATE KEY-----" oninput="saveState()"></textarea>
+      <p class="hint">Paste the full PEM key. Serialized as a single line with <code>\n</code> in .env output.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ── Spot Crypto ── -->
+<div class="section" id="sec-crypto">
+  <div class="section-header open" onclick="toggleSection('crypto')">
+    <div class="section-title-wrap">
+      <span class="section-icon">₿</span>
+      <div>
+        <div class="section-title">Spot Crypto <span style="font-size:0.75rem;font-weight:500;color:#94a3b8;">(Public.com)</span></div>
+        <div class="section-subtitle">BTC, ETH, SOL spot trading via Public / Zero Hash custody</div>
+      </div>
+    </div>
+    <span class="section-chevron open" id="chev-crypto">▼</span>
+  </div>
+  <div class="section-body open" id="body-crypto">
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <strong>Enable Spot Crypto</strong>
+        <span>Adds BTC, ETH, SOL to the neutral watchlist. Trades on same signal thresholds as equities. No additional API key required.</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="CRYPTO_ENABLED" onchange="saveState()">
+        <span class="toggle-slider"></span>
+      </label>
     </div>
   </div>
 </div>
@@ -908,7 +1136,8 @@
 
 <!-- Bottom save bar -->
 <div class="save-bar" style="margin-top:8px;">
-  <button class="btn-save" onclick="saveEnv()">Save .env file</button>
+  <button class="btn-save" id="btn-cloud-save-bottom" onclick="saveToCloud(this)" style="display:none">Save to Cloud</button>
+  <button class="btn-save" id="btn-env-save-bottom" onclick="saveEnv()">Save .env file</button>
   <button class="btn-sm" onclick="copyEnv(this)">Copy to clipboard</button>
   <span class="save-status" id="save-status-bottom">Saved!</span>
 </div>
@@ -985,8 +1214,8 @@
     list.innerHTML = orders.map(order => {
       const sym   = order.symbol || order.instrument?.symbol || '—';
       const side  = order.orderSide || order.side || '—';
-      const qty   = order.quantity || '—';
-      const lim   = order.limitPrice || '';
+      const qty   = order.quantity ? order.quantity : (order.notionalValue ? '$' + parseFloat(order.notionalValue).toFixed(2) : '—');
+      const lim   = order.limitPrice || (order.type === 'MARKET' ? 'MARKET' : '');
       const oid   = order.orderId || order.id || '';
       const sideColor = side === 'BUY' ? '#22c55e' : '#ef4444';
       return `
@@ -1092,19 +1321,27 @@
     'MARKETAUX_API_KEY', 'NEWS_API_KEY', 'ALPHA_VANTAGE_API_KEY',
     'KALSHI_API_KEY', 'KALSHI_RSA_PRIVATE_KEY',
     'SUGGESTION_TOKEN_SECRET', 'CARPET_BAGGER_MAX_POSITION',
+    'BRACKET_BUSTER_MAX_POSITION',
+    'MACRO_TRADER_MAX_POSITION', 'MACRO_TRADER_MIN_SIGNAL', 'MACRO_TRADER_MIN_CONFIDENCE',
+    'POLITICAL_TRADER_MAX_POSITION', 'POLITICAL_TRADER_MIN_SIGNAL', 'POLITICAL_TRADER_MIN_CONFIDENCE',
+    'WEATHER_TRADER_MAX_POSITION', 'WEATHER_TRADER_MIN_EDGE',
+    'FUNDING_RATE_MAX_POSITION', 'FUNDING_RATE_MIN_APR',
+    'COINBASE_API_KEY_NAME', 'COINBASE_PRIVATE_KEY',
   ];
   const ALL_BOOL_FIELDS = [
     'REQUIRE_SELL_APPROVAL', 'TRADE_DEBUG', 'TRADING_PAUSED',
     'OPTIONS_CALLS_ENABLED', 'CARPET_BAGGER_ENABLED',
+    'BRACKET_BUSTER_ENABLED',
+    'MACRO_TRADER_ENABLED', 'POLITICAL_TRADER_ENABLED',
+    'WEATHER_TRADER_ENABLED', 'FUNDING_RATE_ENABLED', 'CRYPTO_ENABLED',
   ];
 
-  const WATCHLIST_DEFAULT = [
-    'AAPL','MSFT','TSLA','NVDA','AMD','META','AMZN','GOOGL',
-    'SPY','QQQ','IWM','XLE','OXY','BNO','BAC','C','INTC',
-    'PLTR','SOFI','SNAP','LYFT','F','PFE','MRNA','RIVN',
-    'SPX','NDX','VIX','CBTX',
-  ];
-  let watchlist = [...WATCHLIST_DEFAULT];
+  const WATCHLIST_BEARISH_DEFAULT = ['RIVN','INTC','SOFI','PFE','MRNA','F','VXX'];
+  const WATCHLIST_BULLISH_DEFAULT = ['XLE','OXY','BNO','LMT','RTX'];
+  const WATCHLIST_NEUTRAL_DEFAULT = ['AAPL','MSFT','NVDA','AMD','META','AMZN','GOOGL','SPY','QQQ','BAC','C'];
+  let watchlistBearish = [...WATCHLIST_BEARISH_DEFAULT];
+  let watchlistBullish = [...WATCHLIST_BULLISH_DEFAULT];
+  let watchlistNeutral = [...WATCHLIST_NEUTRAL_DEFAULT];
   let blocklist = [];
 
   // ── Section accordion ────────────────────────────────────────────────────
@@ -1181,7 +1418,9 @@
       const el = document.getElementById(id);
       if (el) state[id] = el.checked;
     });
-    state['_watchlist'] = watchlist;
+    state['_watchlist_bearish'] = watchlistBearish;
+    state['_watchlist_bullish'] = watchlistBullish;
+    state['_watchlist_neutral'] = watchlistNeutral;
     state['_blocklist'] = blocklist;
     const rt = document.getElementById('RISK_TOLERANCE');
     state['_select_RISK_TOLERANCE'] = rt ? rt.value : 'moderate';
@@ -1209,7 +1448,9 @@
       const el = document.getElementById('RISK_TOLERANCE');
       if (el) el.value = state['_select_RISK_TOLERANCE'];
     }
-    if (Array.isArray(state['_watchlist'])) { watchlist = state['_watchlist']; renderChips(); }
+    if (Array.isArray(state['_watchlist_bearish'])) { watchlistBearish = state['_watchlist_bearish']; renderChips(); }
+    if (Array.isArray(state['_watchlist_bullish'])) { watchlistBullish = state['_watchlist_bullish']; renderChips(); }
+    if (Array.isArray(state['_watchlist_neutral'])) { watchlistNeutral = state['_watchlist_neutral']; renderChips(); }
     if (Array.isArray(state['_blocklist'])) { blocklist = state['_blocklist']; renderChips(); }
     updateKeysMeta();
   }
@@ -1259,12 +1500,26 @@
       const el = document.getElementById('RISK_TOLERANCE');
       if (el) el.value = parsed['RISK_TOLERANCE'];
     }
-    if ('WATCHLIST' in parsed && parsed['WATCHLIST'].trim()) {
-      watchlist = parsed['WATCHLIST'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+    if ('WATCHLIST_BEARISH' in parsed && parsed['WATCHLIST_BEARISH'].trim()) {
+      watchlistBearish = parsed['WATCHLIST_BEARISH'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+      renderChips();
+    }
+    if ('WATCHLIST_BULLISH' in parsed && parsed['WATCHLIST_BULLISH'].trim()) {
+      watchlistBullish = parsed['WATCHLIST_BULLISH'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+      renderChips();
+    }
+    if ('WATCHLIST_NEUTRAL' in parsed && parsed['WATCHLIST_NEUTRAL'].trim()) {
+      watchlistNeutral = parsed['WATCHLIST_NEUTRAL'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
       renderChips();
     }
     if ('BLACKLIST' in parsed && parsed['BLACKLIST'].trim()) {
       blocklist = parsed['BLACKLIST'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+      renderChips();
+    }
+    // Legacy: if old flat WATCHLIST found, distribute to neutral tier
+    if ('WATCHLIST' in parsed && parsed['WATCHLIST'].trim() &&
+        !('WATCHLIST_NEUTRAL' in parsed)) {
+      watchlistNeutral = parsed['WATCHLIST'].split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
       renderChips();
     }
     updateKeysMeta();
@@ -1292,11 +1547,27 @@
   }
 
   function renderChips() {
-    renderChipList('watchlist-wrap', watchlist, false);
+    renderChipList('watchlist-bearish-wrap', watchlistBearish, false);
+    renderChipList('watchlist-bullish-wrap', watchlistBullish, false);
+    renderChipList('watchlist-neutral-wrap', watchlistNeutral, false);
     renderChipList('blocklist-wrap', blocklist, true);
   }
 
   function focusChipInput(id) { const el = document.getElementById(id); if (el) el.focus(); }
+
+  function _listForContainer(containerId) {
+    if (containerId === 'watchlist-bearish-wrap') return watchlistBearish;
+    if (containerId === 'watchlist-bullish-wrap') return watchlistBullish;
+    if (containerId === 'watchlist-neutral-wrap') return watchlistNeutral;
+    return blocklist;
+  }
+
+  function _listForInputId(inputId) {
+    if (inputId === 'watchlist-bearish-input') return watchlistBearish;
+    if (inputId === 'watchlist-bullish-input') return watchlistBullish;
+    if (inputId === 'watchlist-neutral-input') return watchlistNeutral;
+    return blocklist;
+  }
 
   function chipKeydown(event, list, which) {
     if (event.key === 'Enter' || event.key === ',') {
@@ -1312,14 +1583,14 @@
   function chipInputChanged(el) {
     if (el.value.includes(',')) {
       const tickers = el.value.split(',').map(t => t.trim().toUpperCase().replace(/[^A-Z]/g, '')).filter(Boolean);
-      const list = el.id === 'watchlist-input' ? watchlist : blocklist;
+      const list = _listForInputId(el.id);
       tickers.forEach(t => { if (t && !list.includes(t)) list.push(t); });
       renderChips(); saveState(); el.value = '';
     }
   }
 
   function removeChip(containerId, ticker) {
-    const list = containerId === 'watchlist-wrap' ? watchlist : blocklist;
+    const list = _listForContainer(containerId);
     const idx = list.indexOf(ticker);
     if (idx >= 0) list.splice(idx, 1);
     renderChips(); saveState();
@@ -1370,8 +1641,10 @@
       '# Security',
       `SUGGESTION_TOKEN_SECRET=${val('SUGGESTION_TOKEN_SECRET')}`,
       '',
-      '# Watchlist & blocklist',
-      `WATCHLIST=${watchlist.join(',')}`,
+      '# Watchlist & blocklist (tiered — controls directional bias)',
+      `WATCHLIST_BEARISH=${watchlistBearish.join(',')}`,
+      `WATCHLIST_BULLISH=${watchlistBullish.join(',')}`,
+      `WATCHLIST_NEUTRAL=${watchlistNeutral.join(',')}`,
       `BLACKLIST=${blocklist.join(',')}`,
       '',
       '# Risk profile',
@@ -1384,6 +1657,42 @@
       `REQUIRE_SELL_APPROVAL=${val('REQUIRE_SELL_APPROVAL')}`,
       `TRADING_PAUSED=${val('TRADING_PAUSED')}`,
       `TRADE_DEBUG=${val('TRADE_DEBUG')}`,
+      '',
+      '# Bracket Buster — Kalshi tournament multi-tier arb',
+      `BRACKET_BUSTER_ENABLED=${val('BRACKET_BUSTER_ENABLED')}`,
+      `BRACKET_BUSTER_MAX_POSITION=${val('BRACKET_BUSTER_MAX_POSITION')}`,
+      '',
+      '# Macro Trader — Kalshi economic prediction market bridge',
+      `MACRO_TRADER_ENABLED=${val('MACRO_TRADER_ENABLED')}`,
+      `MACRO_TRADER_MAX_POSITION=${val('MACRO_TRADER_MAX_POSITION')}`,
+      `MACRO_TRADER_MIN_SIGNAL=${val('MACRO_TRADER_MIN_SIGNAL')}`,
+      `MACRO_TRADER_MIN_CONFIDENCE=${val('MACRO_TRADER_MIN_CONFIDENCE')}`,
+      '',
+      '# Political Trader — Kalshi political prediction markets',
+      `POLITICAL_TRADER_ENABLED=${val('POLITICAL_TRADER_ENABLED')}`,
+      `POLITICAL_TRADER_MAX_POSITION=${val('POLITICAL_TRADER_MAX_POSITION')}`,
+      `POLITICAL_TRADER_MIN_SIGNAL=${val('POLITICAL_TRADER_MIN_SIGNAL')}`,
+      `POLITICAL_TRADER_MIN_CONFIDENCE=${val('POLITICAL_TRADER_MIN_CONFIDENCE')}`,
+      '',
+      '# Weather Trader — NWS-edge Kalshi weather prediction markets',
+      `WEATHER_TRADER_ENABLED=${val('WEATHER_TRADER_ENABLED')}`,
+      `WEATHER_TRADER_MAX_POSITION=${val('WEATHER_TRADER_MAX_POSITION')}`,
+      `WEATHER_TRADER_MIN_EDGE=${val('WEATHER_TRADER_MIN_EDGE')}`,
+      '',
+      '# Funding Rate Arb — Coinbase Advanced (delta-neutral basis arb)',
+      (() => {
+        const coinbaseKey = document.getElementById('COINBASE_PRIVATE_KEY').value.trim();
+        return coinbaseKey
+          ? `COINBASE_PRIVATE_KEY="${coinbaseKey.replace(/\n/g, '\\n')}"`
+          : '# COINBASE_PRIVATE_KEY=  # store in AWS Secrets Manager';
+      })(),
+      `COINBASE_API_KEY_NAME=${val('COINBASE_API_KEY_NAME')}`,
+      `FUNDING_RATE_ENABLED=${val('FUNDING_RATE_ENABLED')}`,
+      `FUNDING_RATE_MAX_POSITION=${val('FUNDING_RATE_MAX_POSITION')}`,
+      `FUNDING_RATE_MIN_APR=${val('FUNDING_RATE_MIN_APR')}`,
+      ``,
+      `# Spot crypto via Public.com`,
+      `CRYPTO_ENABLED=${val('CRYPTO_ENABLED')}`,
     ].join('\n');
   }
 
@@ -1480,8 +1789,9 @@
   }
 
   function addTickerFromSearch(ticker) {
-    if (!watchlist.includes(ticker)) {
-      watchlist.push(ticker);
+    // Add to neutral by default when using search
+    if (!watchlistBearish.includes(ticker) && !watchlistBullish.includes(ticker) && !watchlistNeutral.includes(ticker)) {
+      watchlistNeutral.push(ticker);
       renderChips();
       saveState();
     }
@@ -1499,9 +1809,124 @@
     }
   });
 
+  // ── Cloud mode (served from Lambda /settings?token=...) ─────────────────
+  const _CLOUD = window._TRADERBOT_CLOUD_MODE === true;
+  const _API   = window._TRADERBOT_API_BASE || '';
+  const _TOKEN = window._TRADERBOT_TOKEN || '';
+
+  function _authHeaders() {
+    return { 'Authorization': `Bearer ${_TOKEN}`, 'Content-Type': 'application/json' };
+  }
+
+  function _applyCloudSettings(data) {
+    // Booleans
+    const boolMap = {
+      'true': true, 'false': false,
+      true: true, false: false,
+    };
+    ALL_BOOL_FIELDS.forEach(id => {
+      if (!(id in data)) return;
+      const el = document.getElementById(id);
+      if (el) el.checked = boolMap[data[id]] ?? false;
+    });
+    // Text fields (non-secret ones only — secrets are excluded from /settings/load)
+    ALL_TEXT_FIELDS.forEach(id => {
+      if (!(id in data)) return;
+      const el = document.getElementById(id);
+      if (el) { el.value = data[id]; updateDot(id); }
+    });
+    // Risk tolerance select
+    if (data['RISK_TOLERANCE']) {
+      const el = document.getElementById('RISK_TOLERANCE');
+      if (el) el.value = data['RISK_TOLERANCE'];
+    }
+    // Watchlists
+    if (data['WATCHLIST_BEARISH']) {
+      watchlistBearish = data['WATCHLIST_BEARISH'].split(',').map(t => t.trim()).filter(Boolean);
+    }
+    if (data['WATCHLIST_BULLISH']) {
+      watchlistBullish = data['WATCHLIST_BULLISH'].split(',').map(t => t.trim()).filter(Boolean);
+    }
+    if (data['WATCHLIST_NEUTRAL']) {
+      watchlistNeutral = data['WATCHLIST_NEUTRAL'].split(',').map(t => t.trim()).filter(Boolean);
+    }
+    if (data['BLACKLIST']) {
+      blocklist = data['BLACKLIST'].split(',').map(t => t.trim()).filter(Boolean);
+    }
+    renderChips();
+    updateKeysMeta();
+  }
+
+  function _buildCloudPayload() {
+    const payload = {};
+    ALL_BOOL_FIELDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) payload[id] = el.checked ? 'true' : 'false';
+    });
+    // Text fields (only safe non-secret ones)
+    const SAFE_TEXT = [
+      'CARPET_BAGGER_MAX_POSITION', 'BRACKET_BUSTER_MAX_POSITION',
+      'MACRO_TRADER_MAX_POSITION', 'MACRO_TRADER_MIN_SIGNAL', 'MACRO_TRADER_MIN_CONFIDENCE',
+      'MACRO_TRADER_MIN_EDGE', 'MACRO_TRADER_MAX_BID_ASK_SPREAD',
+      'POLITICAL_TRADER_MAX_POSITION', 'POLITICAL_TRADER_MIN_SIGNAL', 'POLITICAL_TRADER_MIN_CONFIDENCE',
+      'WEATHER_TRADER_MAX_POSITION', 'WEATHER_TRADER_MIN_EDGE',
+      'FUNDING_RATE_MAX_POSITION', 'FUNDING_RATE_MIN_APR',
+      'SNS_TOPIC_ARN', 'LAMBDA_FUNCTION_URL',
+    ];
+    SAFE_TEXT.forEach(id => {
+      const el = document.getElementById(id);
+      if (el && el.value.trim()) payload[id] = el.value.trim();
+    });
+    // Risk tolerance
+    const rt = document.getElementById('RISK_TOLERANCE');
+    if (rt) payload['RISK_TOLERANCE'] = rt.value;
+    // Watchlists
+    payload['WATCHLIST_BEARISH'] = watchlistBearish.join(',');
+    payload['WATCHLIST_BULLISH'] = watchlistBullish.join(',');
+    payload['WATCHLIST_NEUTRAL'] = watchlistNeutral.join(',');
+    payload['BLACKLIST']         = blocklist.join(',');
+    return payload;
+  }
+
+  async function saveToCloud(btn) {
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+      const resp = await fetch(`${_API}/settings`, {
+        method: 'POST',
+        headers: _authHeaders(),
+        body: JSON.stringify(_buildCloudPayload()),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      btn.textContent = '✓ Saved!';
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+      showSavedIndicator();
+    } catch (err) {
+      btn.textContent = '✗ Failed: ' + err.message;
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+    }
+  }
+
+  async function _loadCloudSettings() {
+    try {
+      const resp = await fetch(`${_API}/settings`, { headers: _authHeaders() });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      _applyCloudSettings(data);
+    } catch {}
+  }
+
   // ── Init ─────────────────────────────────────────────────────────────────
   renderChips();
-  restoreState();
+  if (_CLOUD) {
+    // Cloud mode: load live values from Secrets Manager, show Save to Cloud buttons
+    document.querySelectorAll('#btn-cloud-save, #btn-cloud-save-bottom').forEach(el => el.style.display = '');
+    _loadCloudSettings();
+  } else {
+    restoreState();
+  }
   onRegionChange();
 </script>
 

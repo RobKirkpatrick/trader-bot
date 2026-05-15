@@ -31,7 +31,7 @@ import boto3
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from config.settings import settings
+from config.settings import settings, get_conflicted_tickers
 from sentiment.scanner import SentimentScanner, TickerSentiment
 from core.risk import RiskManager, TradeSignal
 from broker.public_client import PublicClient
@@ -163,10 +163,192 @@ def _execute_close(sym: str, qty: float, client, reason: str) -> dict:
     return result
 
 
+def _sell_blacklisted_positions(client, positions: list[dict], portfolio_value: float = 0.0, conflicted_bases: set[str] | None = None) -> list[dict]:
+    """
+    Auto-sell any open positions whose ticker is on settings.BLACKLIST.
+
+    Called at the top of every scan cycle (market-open, midday, EOD) so
+    blacklisted tickers are liquidated as soon as they are detected,
+    regardless of how the position was opened.
+
+    PDT guard: if a position was opened today, the sell is deferred to the next
+    trading day to avoid a same-day round trip (PDT violation).
+
+    Returns a list of position-review dicts (same shape as EOD position_reviews)
+    ready to be prepended to the normal review list.
+    """
+    import re as _re
+
+    blacklist = {t.strip().upper() for t in settings.BLACKLIST}
+
+    # PDT guard — fetch today's buys once for the whole pass
+    today_buys = _get_today_buy_symbols(portfolio_value)
+    if today_buys is None:
+        # DynamoDB unavailable — skip all blacklist sells to avoid PDT risk
+        logger.warning(
+            "Blacklist enforcement: DynamoDB unavailable — deferring all blacklist sells (PDT guard)"
+        )
+        return []
+
+    reviews: list[dict] = []
+
+    for p in positions:
+        sym = (p.get("instrument", {}).get("symbol") or p.get("symbol") or "").upper()
+        if not sym:
+            continue
+
+        # Extract base ticker (strips option suffixes like dates/strikes)
+        base_match = _re.match(r'^([A-Z]+)', sym)
+        base = base_match.group(1) if base_match else sym
+
+        if base not in blacklist:
+            continue
+
+        # Conflicted tickers (in multiple lists) — don't act until config is resolved
+        if conflicted_bases and base in conflicted_bases:
+            logger.warning(
+                "Blacklist enforcement skipped for %s — ticker has a watchlist conflict, resolve in .env first", base
+            )
+            continue
+
+        qty = _safe_float(p.get("quantity") or p.get("shares"))
+
+        cost_basis = p.get("costBasis")
+        cost_basis_unit = (
+            _safe_float(cost_basis.get("unitCost"))
+            if isinstance(cost_basis, dict) else _safe_float(cost_basis)
+        )
+        avg_price = (
+            _safe_float(p.get("averagePrice"))
+            or _safe_float(p.get("avgCostPerShare"))
+            or cost_basis_unit
+            or _safe_float(p.get("averageCost"))
+        )
+
+        reason = f"Blacklist enforcement: {base} is on the blacklist"
+        review: dict = {
+            "symbol":        sym,
+            "qty":           qty,
+            "current_price": None,
+            "avg_price":     avg_price,
+            "pnl_pct":       None,
+            "pnl_usd":       None,
+            "action":        "hold",
+            "close_reason":  reason,
+            "order_id":      None,
+        }
+
+        # PDT guard: don't sell a position bought today (would create a same-day round trip)
+        if base in today_buys:
+            review["action"] = "pdt_deferred"
+            review["close_reason"] = f"Blacklist enforcement deferred: {base} bought today — PDT guard"
+            logger.warning(
+                "Blacklist enforcement: %s bought today — deferring sell to avoid PDT violation", base
+            )
+            reviews.append(review)
+            continue
+
+        logger.warning("Blacklist enforcement: %s (base=%s) found in portfolio — selling", sym, base)
+
+        if qty and qty > 0:
+            close_result = _execute_close(sym, qty, client, reason)
+            review["action"]    = close_result["action"]
+            review["order_id"]  = close_result["order_id"]
+        else:
+            review["action"] = "skipped_zero_qty"
+            logger.warning("Blacklist enforcement: %s qty=0 or missing — skipping sell", sym)
+
+        reviews.append(review)
+
+    if reviews:
+        sold = [r for r in reviews if r["action"] == "closed"]
+        failed = [r for r in reviews if r["action"] not in ("closed", "skipped_zero_qty")]
+        lines = ["[TraderBot] BLACKLIST ENFORCEMENT"]
+        for r in reviews:
+            lines.append(
+                f"  {r['symbol']}: action={r['action']}"
+                + (f", orderId={r['order_id']}" if r["order_id"] else "")
+            )
+        if failed:
+            lines.append(f"  WARNING: {len(failed)} sell(s) failed — manual review required")
+        _publish_sns("\n".join(lines), subject=f"[TraderBot] Blacklist enforcement: {len(sold)} position(s) liquidated")
+        logger.info("Blacklist enforcement complete: %d sold, %d failed", len(sold), len(failed))
+
+    return reviews
+
+
+def _check_watchlist_conflicts() -> dict[str, list[str]]:
+    """
+    Detect tickers in multiple lists (bearish/bullish/neutral/blacklist).
+
+    Sends a one-per-day SNS alert listing each conflict and which lists it
+    appears in. Conflicted tickers are blocked from all trading until resolved.
+
+    Returns the conflicts dict so callers can filter tickers immediately.
+    Uses DynamoDB to suppress duplicate alerts within the same calendar day.
+    """
+    conflicts = get_conflicted_tickers()
+    if not conflicts:
+        return {}
+
+    # DynamoDB dedup — only alert once per calendar day
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    dedup_key = f"conflict_alert_{today}"
+    already_sent = False
+    try:
+        resp = _dynamodb().get_item(
+            TableName=_LOG_TABLE,
+            Key={"trade_id": {"S": dedup_key}},
+        )
+        already_sent = "Item" in resp
+    except Exception as exc:
+        logger.warning("Conflict dedup check failed (will re-alert): %s", exc)
+
+    if not already_sent:
+        lines = [
+            "[TraderBot] WATCHLIST CONFLICT DETECTED",
+            "The following tickers appear in more than one list and will NOT be traded.",
+            "Resolve conflicts in .env (or Settings UI) and redeploy to resume trading on these tickers.",
+            "",
+        ]
+        for ticker, lists in sorted(conflicts.items()):
+            lines.append(f"  {ticker}: found in {' + '.join(lists)}")
+        lines += [
+            "",
+            "To fix: remove each ticker from all but one list, then redeploy.",
+        ]
+        msg = "\n".join(lines)
+        _publish_sns(msg, subject=f"[TraderBot] ACTION REQUIRED: {len(conflicts)} watchlist conflict(s)")
+        logger.warning("Watchlist conflicts detected — trading blocked on: %s", list(conflicts.keys()))
+
+        # Record dedup so we don't re-alert today
+        try:
+            _dynamodb().put_item(
+                TableName=_LOG_TABLE,
+                Item={
+                    "trade_id":  {"S": dedup_key},
+                    "timestamp": {"S": datetime.now(timezone.utc).isoformat()},
+                    "type":      {"S": "conflict_alert"},
+                    "conflicts": {"S": str(conflicts)},
+                },
+            )
+        except Exception as exc:
+            logger.warning("Conflict dedup write failed: %s", exc)
+    else:
+        logger.warning(
+            "Watchlist conflicts active (alert already sent today) — blocked tickers: %s",
+            list(conflicts.keys()),
+        )
+
+    return conflicts
+
+
 def _close_intraday(position: dict, client, reason: str) -> dict:
     """
-    Request approval to close a position — sends email with one-click sell link.
-    Does NOT auto-sell. Returns a 'pending_approval' result.
+    Close or request approval for an intraday position.
+
+    When REQUIRE_SELL_APPROVAL=false (default), executes the sell immediately.
+    When REQUIRE_SELL_APPROVAL=true, sends an HMAC-signed approval email instead.
     """
     import re
     sym = (position.get("instrument", {}).get("symbol") or position.get("symbol") or "").upper()
@@ -184,6 +366,9 @@ def _close_intraday(position: dict, client, reason: str) -> dict:
     if not sym or qty is None or qty <= 0:
         result["reason"] = f"{reason} — skipped (qty={qty})"
         return result
+
+    if not settings.REQUIRE_SELL_APPROVAL:
+        return _execute_close(sym, qty, client, reason)
 
     try:
         _notify_sell_approval(sym, qty, reason)
@@ -576,24 +761,16 @@ def _evaluate_options_profit_taking(
 def _market_is_open() -> bool:
     """
     True during regular US market hours: 9:30–16:00 ET, Mon–Fri.
-    Uses UTC; ET = UTC-5 (EST) or UTC-4 (EDT).
-    This is a simple check — does not account for market holidays.
+    Uses America/New_York so DST is handled automatically.
+    Does not account for market holidays.
     """
-    now_utc = datetime.now(timezone.utc)
-    weekday = now_utc.weekday()       # 0=Mon … 4=Fri
+    import zoneinfo  # noqa: PLC0415
+    now_et  = datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+    weekday = now_et.weekday()   # 0=Mon … 4=Fri
     if weekday >= 5:
         return False
-
-    # Approximate ET offset — good enough for scheduling purposes
-    # (EventBridge fires at 8am and 12pm ET which are always market-relevant windows)
-    hour_utc = now_utc.hour
-    minute_utc = now_utc.minute
-
-    # 9:30 ET = 14:30 UTC (EST) or 13:30 UTC (EDT)
-    # 16:00 ET = 21:00 UTC (EST) or 20:00 UTC (EDT)
-    # Be conservative: 13:30–21:00 UTC covers both DST states
-    total_minutes = hour_utc * 60 + minute_utc
-    return 810 <= total_minutes <= 1260   # 13:30–21:00 UTC
+    total_minutes = now_et.hour * 60 + now_et.minute
+    return 570 <= total_minutes < 960   # 9:30 ET (inclusive) to 16:00 ET (exclusive)
 
 
 # ---------------------------------------------------------------------------
@@ -882,6 +1059,145 @@ def _execute_buy_call(
     return result
 
 
+def _execute_buy_put(
+    ts: TickerSentiment,
+    client: PublicClient,
+    risk_manager: RiskManager,
+    positions: list[dict],
+    position_size_usd: float,
+) -> dict:
+    """
+    Buy a single-leg put option for a bearish signal on a bearish/neutral ticker.
+
+    Mirrors _execute_buy_call: finds cheapest ATM-or-OTM put within 14-45 DTE
+    that costs ≤ position_size_usd for 1 contract. Returns "skipped" if no
+    affordable contract exists.
+    """
+    result = {
+        "ticker":   ts.ticker,
+        "signal":   ts.signal,
+        "score":    ts.score,
+        "action":   "skipped",
+        "reason":   "",
+        "order_id": None,
+        "status":   None,
+        "amount":   None,
+    }
+
+    try:
+        # Current price
+        quotes = client.get_quotes([ts.ticker])
+        quote_list = quotes.get("quotes", []) if isinstance(quotes, dict) else quotes
+        current_price = 0.0
+        for q in quote_list:
+            sym = (
+                q.get("instrument", {}).get("symbol")
+                or q.get("symbol") or q.get("ticker") or ""
+            ).upper()
+            if sym == ts.ticker:
+                for field in ("last", "lastPrice", "ask", "price"):
+                    v = q.get(field)
+                    if v:
+                        current_price = float(v)
+                        break
+
+        if current_price <= 0:
+            result["reason"] = f"Could not get current price for {ts.ticker}"
+            return result
+
+        # Pick expiration
+        expirations = client.get_option_expirations(ts.ticker)
+        if not expirations:
+            result["reason"] = f"No option expirations available for {ts.ticker}"
+            return result
+
+        today = datetime.now(timezone.utc).date()
+        target_dte = (_OPTIONS_DTE_MIN + _OPTIONS_DTE_MAX) / 2
+        candidates = []
+        for exp_str in expirations:
+            try:
+                exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                dte = (exp_date - today).days
+                if _OPTIONS_DTE_MIN <= dte <= _OPTIONS_DTE_MAX:
+                    candidates.append((abs(dte - target_dte), exp_str))
+            except ValueError:
+                continue
+
+        if not candidates:
+            result["reason"] = f"No expiration in {_OPTIONS_DTE_MIN}-{_OPTIONS_DTE_MAX} DTE window"
+            return result
+
+        candidates.sort()
+        expiration = candidates[0][1]
+
+        # Get put chain; walk from ATM outward until we find an affordable contract
+        chain = client.get_option_chain(ts.ticker, expiration, option_type="PUT")
+        if not chain:
+            result["reason"] = f"Empty put chain for {ts.ticker} exp={expiration}"
+            return result
+
+        # Sort ascending by strike distance from current price (ATM first)
+        chain.sort(key=lambda c: abs(float(c.get("strikePrice", 0)) - current_price))
+
+        chosen = None
+        chosen_mid = 0.0
+        for contract in chain[:10]:
+            strike = float(contract.get("strikePrice", 0))
+            if strike > current_price * 1.01:   # skip deep ITM (expensive)
+                continue
+            bid = float(contract.get("bid") or 0)
+            ask = float(contract.get("ask") or 0)
+            if bid <= 0 or ask <= 0:
+                continue
+            mid = (bid + ask) / 2
+            if mid * 100 <= position_size_usd:   # 1 contract = 100 shares
+                chosen = contract
+                chosen_mid = mid
+                break
+
+        if not chosen:
+            result["reason"] = (
+                f"No affordable put for {ts.ticker} within ${position_size_usd:.0f} budget"
+            )
+            return result
+
+        option_symbol = chosen.get("optionSymbol", "")
+        strike_str    = chosen.get("strikePrice", "")
+
+        order = client.place_options_order(
+            option_symbol=option_symbol,
+            side="BUY",
+            quantity="1",
+            order_type="LIMIT",
+            limit_price=f"{chosen_mid:.2f}",
+        )
+        order_id = order.get("orderId", "")
+        result["action"]   = "order_placed"
+        result["order_id"] = order_id
+        result["amount"]   = f"1 put @ ${chosen_mid:.2f} (strike={strike_str} exp={expiration})"
+        logger.info("Put option placed: %s %s", ts.ticker, result["amount"])
+
+        # Poll for fill
+        if order_id:
+            for _ in range(5):
+                time.sleep(3)
+                try:
+                    status = client.get_order(order_id)
+                    state = (status.get("status") or status.get("orderStatus") or "").upper()
+                    result["status"] = state
+                    if state in ("FILLED", "CANCELLED", "REJECTED"):
+                        break
+                except Exception:
+                    break
+
+    except Exception as exc:
+        result["action"] = "error"
+        result["reason"] = str(exc)
+        logger.error("Put buy failed for %s: %s", ts.ticker, exc)
+
+    return result
+
+
 def _execute_signal(
     ts: TickerSentiment,
     client: PublicClient,
@@ -1093,6 +1409,14 @@ def _build_alert_message(
         for r in errors:
             lines.append(f"  {r['ticker']}: {r['reason']}")
         lines.append("")
+
+    # Coinbase basis arb + macro trader status
+    basis_block = _basis_arb_status_block()
+    if basis_block:
+        lines += [basis_block, ""]
+    macro_block = _macro_trader_status_block()
+    if macro_block:
+        lines += [macro_block, ""]
 
     return "\n".join(lines)
 
@@ -1383,7 +1707,111 @@ def _build_eod_message(
         "",
         "Market closes in ~15 minutes.",
     ]
+
+    basis_block = _basis_arb_status_block()
+    if basis_block:
+        lines += ["", basis_block]
+    macro_block = _macro_trader_status_block()
+    if macro_block:
+        lines += ["", macro_block]
+
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Coinbase basis arb + macro trader status blocks (injected into emails)
+# ---------------------------------------------------------------------------
+
+def _basis_arb_status_block() -> str:
+    """
+    Return a one-section summary of current Coinbase basis arb state.
+    Reads funding-rate-positions and funding-rate-opportunities from DynamoDB.
+    Always reads DynamoDB so positions are visible even if FUNDING_RATE_ENABLED=false.
+    Returns empty string if no data or on any error.
+    """
+    try:
+        ddb = boto3.resource("dynamodb", region_name=settings.AWS_REGION)
+        pos_table = ddb.Table("funding-rate-positions")
+        opp_table = ddb.Table("funding-rate-opportunities")
+
+        open_pos = pos_table.scan(
+            FilterExpression="#s = :open",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":open": "open"},
+        ).get("Items", [])
+
+        pending_opp = opp_table.scan(
+            FilterExpression="#s = :pending",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":pending": "pending"},
+        ).get("Items", [])
+
+        if not open_pos and not pending_opp:
+            return ""
+
+        lines = ["─" * 42, "COINBASE BASIS ARB:"]
+        for p in open_pos:
+            basis = float(p.get("expected_basis_usd", 0))
+            lines.append(
+                f"  OPEN  {p.get('spot_ticker','?')} / {p.get('futures_ticker','?')}"
+                f"  notional=${float(p.get('notional_usd',0)):.0f}"
+                f"  exp basis=${basis:.2f}"
+                f"  expiry={p.get('expiry_date','?')}"
+            )
+
+        if pending_opp:
+            lines.append(f"  {len(pending_opp)} pending opportunity/ies queued")
+
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.debug("Basis arb status block failed (non-fatal): %s", exc)
+        return ""
+
+
+def _macro_trader_status_block() -> str:
+    """
+    Return a one-section summary of current macro_trader state.
+    Reads macro-positions and macro-opportunities from DynamoDB.
+    Returns empty string if MACRO_TRADER_ENABLED=false or on any error.
+    """
+    if not settings.MACRO_TRADER_ENABLED:
+        return ""
+    try:
+        ddb = boto3.resource("dynamodb", region_name=settings.AWS_REGION)
+        pos_table = ddb.Table(settings.MACRO_POSITIONS_TABLE)
+        opp_table = ddb.Table(settings.MACRO_OPPORTUNITIES_TABLE)
+
+        open_pos = pos_table.scan(
+            FilterExpression="#s = :open",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":open": "open"},
+        ).get("Items", [])
+
+        pending_opp = opp_table.scan(
+            FilterExpression="#s = :pending",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":pending": "pending"},
+        ).get("Items", [])
+
+        lines = ["─" * 42, "MACRO TRADER (Kalshi):"]
+        if open_pos:
+            for p in open_pos:
+                lines.append(
+                    f"  OPEN  {p.get('market_ticker','?')}  {p.get('direction','?').upper()}"
+                    f"  @ {float(p.get('entry_price', 0)):.2f}"
+                    f"  signal={p.get('signal_key','?')}"
+                    f"  resolves={p.get('resolution_date','?')}"
+                )
+        else:
+            lines.append("  No open positions")
+
+        if pending_opp:
+            lines.append(f"  {len(pending_opp)} pending opportunity/ies queued")
+
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.debug("Macro trader status block failed (non-fatal): %s", exc)
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -1435,23 +1863,31 @@ def _get_today_buy_symbols(account_equity: float = 0.0) -> set[str] | None:
     try:
         db    = _dynamodb()
         today = date.today().isoformat()   # "2026-03-06"
-        resp  = db.scan(
-            TableName=_LOG_TABLE,
-            FilterExpression="begins_with(#ts, :today) AND action_taken = :action",
-            ExpressionAttributeNames={"#ts": "timestamp"},
-            ExpressionAttributeValues={
+        scan_kwargs = {
+            "TableName": _LOG_TABLE,
+            "FilterExpression": "begins_with(#ts, :today) AND action_taken = :action",
+            "ExpressionAttributeNames": {"#ts": "timestamp"},
+            "ExpressionAttributeValues": {
                 ":today":  {"S": today},
                 ":action": {"S": "order_placed"},
             },
-            ProjectionExpression="symbol",
-        )
+            "ProjectionExpression": "symbol",
+        }
         result: set[str] = set()
-        for item in resp.get("Items", []):
-            sym = item.get("symbol", {}).get("S", "").upper()
-            if sym:
-                m = re.match(r'^([A-Z]+)', sym)
-                if m:
-                    result.add(m.group(1))
+        last_key = None
+        while True:
+            if last_key:
+                scan_kwargs["ExclusiveStartKey"] = last_key
+            resp = db.scan(**scan_kwargs)
+            for item in resp.get("Items", []):
+                sym = item.get("symbol", {}).get("S", "").upper()
+                if sym:
+                    m = re.match(r'^([A-Z]+)', sym)
+                    if m:
+                        result.add(m.group(1))
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
         logger.info("PDT guard: %d symbol(s) bought today: %s", len(result), result or "none")
         return result
     except Exception as exc:
@@ -1594,7 +2030,13 @@ def _execute_with_agent(
     # Gather live market data from Public.com
     provider = PublicOptionsProvider(client)
     quote = provider.get_quote(ts.ticker)
-    side = "call" if ts.signal == "bullish" else "put"
+    bias = getattr(ts, "bias", "neutral")
+    if bias == "bearish":
+        side = "put"
+    elif bias == "bullish":
+        side = "call"
+    else:
+        side = "call" if ts.signal == "bullish" else "put"
     top_contracts = []
     try:
         top_contracts = provider.get_best_contracts(ts.ticker, side, max_premium)
@@ -1673,6 +2115,53 @@ def _execute_with_agent(
 
     order    = None
     try:
+        bias = getattr(ts, "bias", "neutral")
+
+        # Bias enforcement — reject directions that conflict with the watchlist tier
+        if c_type == "call" and bias == "bearish":
+            logger.warning(
+                "Bias enforcement: %s is BEARISH tier — rejecting call signal (score=%.3f)",
+                ts.ticker, ts.score,
+            )
+            result["reason"] = f"Bias enforcement: {ts.ticker} is bearish — call rejected"
+            result["action"] = "bias_rejected"
+            _log_decision(ts.ticker, decision, account_balance, "bias_rejected", edgar_context=edgar_context)
+            return result
+
+        if c_type == "put" and bias == "bullish":
+            logger.warning(
+                "Bias enforcement: %s is BULLISH tier — rejecting put signal (score=%.3f)",
+                ts.ticker, ts.score,
+            )
+            result["reason"] = f"Bias enforcement: {ts.ticker} is bullish — put rejected"
+            result["action"] = "bias_rejected"
+            _log_decision(ts.ticker, decision, account_balance, "bias_rejected", edgar_context=edgar_context)
+            return result
+
+        if c_type == "put" and bias in ("bearish", "neutral") and ts.score <= -0.35:
+            # Execute put buy directly (no approval gate — bias explicitly permits this direction)
+            put_result = _execute_buy_put(ts, client, risk_manager, positions, pos_size)
+            if put_result["action"] == "order_placed":
+                result.update(put_result)
+                _log_decision(ts.ticker, decision, account_balance, "order_placed", edgar_context=edgar_context)
+                return result
+            else:
+                # Put failed or unaffordable — fall through to stock buy
+                logger.info(
+                    "Put buy failed/skipped for %s (%s) — buying stock instead",
+                    ts.ticker, put_result.get("reason", ""),
+                )
+                c_type   = "stock"
+                c_symbol = ts.ticker
+        elif c_type == "put":
+            # Put signal but score above put threshold — degrade to stock buy
+            logger.info(
+                "Put signal for %s score=%.3f above -0.35 threshold — buying stock instead",
+                ts.ticker, ts.score,
+            )
+            c_type   = "stock"
+            c_symbol = ts.ticker
+
         if c_type == "call" and c_symbol and c_symbol != ts.ticker:
             # Send HMAC-signed approval link for calls; buy stock as position starter while waiting
             signal_price = float(quote.get("last") or quote.get("ask") or quote.get("bid") or 0) if quote else 0.0
@@ -1683,11 +2172,6 @@ def _execute_with_agent(
             )
             logger.info("Call approval link sent for %s (signal @ $%.2f) — buying stock instead",
                         ts.ticker, signal_price)
-            c_type   = "stock"
-            c_symbol = ts.ticker
-        elif c_type == "put":
-            # Puts disabled — degrade to stock buy
-            logger.info("Put signal for %s suppressed (puts disabled) — buying stock instead", ts.ticker)
             c_type   = "stock"
             c_symbol = ts.ticker
 
@@ -1829,10 +2313,20 @@ def run_edgar_scan() -> dict:
         logger.info("EDGAR scan: no 8-K filings found for watchlist today")
         return {"window": "edgar_scan", "filings_found": 0, "acted_on": 0}
 
-    high_impact = [s for s in edgar_signals.values() if s["priority"]]
+    # Filter to filings not yet processed — prevents re-alerting every 5 min for the same filing
+    new_edgar_signals = {
+        ticker: sig for ticker, sig in edgar_signals.items()
+        if not _edgar_already_processed(sig["accession_number"])
+    }
+
+    if not new_edgar_signals:
+        logger.info("EDGAR scan: %d filing(s) found, all already processed", len(edgar_signals))
+        return {"window": "edgar_scan", "filings_found": len(edgar_signals), "acted_on": 0}
+
+    high_impact = [s for s in new_edgar_signals.values() if s["priority"]]
     logger.info(
-        "EDGAR scan: %d filings found, %d high-impact",
-        len(edgar_signals), len(high_impact),
+        "EDGAR scan: %d filings found, %d new, %d new high-impact",
+        len(edgar_signals), len(new_edgar_signals), len(high_impact),
     )
 
     buying_power = account_balance.get("cash_balance", 0.0)
@@ -1843,6 +2337,7 @@ def run_edgar_scan() -> dict:
         ticker = sig["ticker"]
         accno  = sig["accession_number"]
 
+        # Already guarded by new_edgar_signals filter above, but keep as safety net
         if _edgar_already_processed(accno):
             logger.info("EDGAR: %s (%s) already processed — skipping", ticker, accno)
             continue
@@ -1879,31 +2374,35 @@ def run_edgar_scan() -> dict:
             except Exception:
                 pass
 
-    # EDGAR SNS summary
-    if edgar_signals:
-        lines = [
-            "EDGAR 8-K Monitor",
-            f"Filings found: {len(edgar_signals)}  |  High-impact: {len(high_impact)}",
-            "",
-        ]
-        for ticker, sig in edgar_signals.items():
-            icon = "!" if sig["priority"] else " "
-            lines.append(
-                f" {icon} {ticker}: {sig['catalyst']} (score {sig['score']:.1f}) "
-                f"items={sig['items']} direction={sig['direction']}"
-            )
-        if trade_results:
-            lines += ["", "EDGAR TRADES:"]
-            for tr in trade_results:
-                lines.append(f"  {tr['ticker']}: {tr['action']} — {tr.get('reason','')}")
-        try:
-            subject = (
-                f"[TraderBot] EDGAR: {len(high_impact)} high-impact 8-K"
-                + ("s" if len(high_impact) != 1 else "")
-            )
-            _publish_sns("\n".join(lines), subject=subject)
-        except Exception as exc:
-            logger.warning("EDGAR SNS failed: %s", exc)
+    # Mark non-high-impact new signals as processed so they don't re-appear in every scan
+    for sig in new_edgar_signals.values():
+        if not sig["priority"]:
+            _mark_edgar_processed(sig["accession_number"])
+
+    # EDGAR SNS summary — only fires once per filing (new_edgar_signals already filtered)
+    lines = [
+        "EDGAR 8-K Monitor",
+        f"New filings: {len(new_edgar_signals)}  |  High-impact: {len(high_impact)}",
+        "",
+    ]
+    for ticker, sig in new_edgar_signals.items():
+        icon = "!" if sig["priority"] else " "
+        lines.append(
+            f" {icon} {ticker}: {sig['catalyst']} (score {sig['score']:.1f}) "
+            f"items={sig['items']} direction={sig['direction']}"
+        )
+    if trade_results:
+        lines += ["", "EDGAR TRADES:"]
+        for tr in trade_results:
+            lines.append(f"  {tr['ticker']}: {tr['action']} — {tr.get('reason','')}")
+    try:
+        subject = (
+            f"[TraderBot] EDGAR: {len(high_impact)} high-impact 8-K"
+            + ("s" if len(high_impact) != 1 else "")
+        )
+        _publish_sns("\n".join(lines), subject=subject)
+    except Exception as exc:
+        logger.warning("EDGAR SNS failed: %s", exc)
 
     acted = sum(1 for tr in trade_results if tr["action"] == "order_placed")
     return {
@@ -1990,15 +2489,44 @@ def run_end_of_day_scan(
     if positions:
         logger.info("EOD position sample keys: %s", list(positions[0].keys()))
 
+    # Conflict check — alert on misconfigured watchlist, block conflicted tickers
+    conflicts = _check_watchlist_conflicts()
+    conflicted_bases: set[str] = set(conflicts.keys())
+
+    # Blacklist enforcement: liquidate any positions in blacklisted tickers immediately
+    blacklist_reviews = _sell_blacklisted_positions(client, positions, portfolio_value, conflicted_bases)
+    blacklisted_syms: set[str] = {r["symbol"] for r in blacklist_reviews}
+
     # PDT guard: don't stop-loss close positions opened today (would create a day-trade round trip)
-    today_buys = _get_today_buy_symbols(portfolio_value) or set()   # empty set = no buys logged = safe to close all
+    today_buys = _get_today_buy_symbols(portfolio_value)
+    if today_buys is None:
+        # DynamoDB unavailable — we can't safely determine which positions were bought today.
+        # Block all EOD closes rather than risk a day-trade violation.
+        logger.warning("PDT guard: DynamoDB unavailable — skipping all EOD closes to prevent day-trade violations")
+        today_buys = set()  # profit-taking / stop-loss loops check membership; set them to skip via the flag below
+        _eod_pdt_blocked = True
+    else:
+        _eod_pdt_blocked = False
+
+    if _eod_pdt_blocked:
+        # Can't determine today's buys — skip all closes to avoid potential day trades
+        logger.warning("PDT guard: skipping EOD profit-take and stop-loss passes (DynamoDB unavailable)")
+        return {
+            "window":             "end_of_day",
+            "positions_reviewed": len(positions),
+            "closed":             0,
+            "pending_approval":   0,
+            "pdt_blocked":        True,
+        }
 
     # Options profit-taking: close positions up ≥ 50% or ≤ 14 DTE remaining
     profit_takes = _evaluate_options_profit_taking(positions, client, today_buys)
     profit_take_syms: set[str] = set()
-    position_reviews: list[dict] = []
+    position_reviews: list[dict] = list(blacklist_reviews)  # blacklist sells go first
     for pt in profit_takes:
         pt_sym = (pt["position"].get("instrument", {}).get("symbol") or pt["position"].get("symbol") or "").upper()
+        if pt_sym in blacklisted_syms:
+            continue  # already handled by blacklist enforcement above
         pt_qty = _safe_float(pt["position"].get("quantity") or pt["position"].get("shares"))
         pt_review: dict = {
             "symbol":        pt_sym,
@@ -2015,10 +2543,15 @@ def run_end_of_day_scan(
             "order_id":      None,
         }
         if pt_qty and pt_qty > 0:
-            # Options require manual approval — send email instead of auto-selling
-            _notify_sell_approval(pt_sym, pt_qty, pt["reason"])
-            pt_review["action"] = "pending_approval"
-            logger.info("EOD profit-take: sell approval emailed for %s ×%d | reason=%s", pt_sym, int(pt_qty), pt["reason"])
+            if settings.REQUIRE_SELL_APPROVAL:
+                _notify_sell_approval(pt_sym, pt_qty, pt["reason"])
+                pt_review["action"] = "pending_approval"
+                logger.info("EOD profit-take: sell approval emailed for %s ×%d | reason=%s", pt_sym, int(pt_qty), pt["reason"])
+            else:
+                close_result = _execute_close(pt_sym, pt_qty, client, pt["reason"])
+                pt_review["action"] = close_result["action"]
+                pt_review["order_id"] = close_result["order_id"]
+                logger.info("EOD profit-take: auto-closed %s ×%d | reason=%s", pt_sym, int(pt_qty), pt["reason"])
         position_reviews.append(pt_review)
         profit_take_syms.add(pt_sym)
 
@@ -2029,8 +2562,8 @@ def run_end_of_day_scan(
         if not sym:
             continue
 
-        # Skip positions already handled by profit-taking above
-        if sym in profit_take_syms:
+        # Skip positions already handled by profit-taking or blacklist enforcement above
+        if sym in profit_take_syms or sym in blacklisted_syms:
             continue
 
         qty           = _safe_float(p.get("quantity") or p.get("shares"))
@@ -2086,30 +2619,17 @@ def run_end_of_day_scan(
                         "Sell approval required for %s — stop-loss not auto-executed (%s)",
                         sym, review["close_reason"],
                     )
-                elif is_options:
-                    # Options always require manual approval — send email instead of auto-selling
-                    try:
-                        _notify_sell_approval(sym, qty, review["close_reason"])
-                        review["action"] = "pending_approval"
-                        logger.info("EOD stop-loss: sell approval emailed for %s ×%.0f", sym, qty)
-                    except Exception as exc:
-                        logger.error("Could not send sell approval for %s: %s", sym, exc)
-                        review["action"] = "close_failed"
-                        review["close_reason"] += f" — approval email failed: {exc}"
                 else:
                     try:
-                        order = client.place_order(
-                            symbol=sym, side="SELL", order_type="MARKET",
-                            quantity=str(qty),
-                        )
-                        order_id = order.get("orderId", "")
-                        review["action"]   = "closed"
-                        review["order_id"] = order_id
-                        if pnl_usd:
+                        close_result = _execute_close(sym, qty, client, review["close_reason"])
+                        review["action"]   = close_result["action"]
+                        review["order_id"] = close_result["order_id"]
+                        if close_result["action"] == "closed" and pnl_usd:
                             risk_manager.record_loss(abs(pnl_usd))
                         logger.info(
-                            "EOD stop-loss close: SELL %s ×%.4f | orderId=%s | P&L=%.2f",
-                            sym, qty, order_id, pnl_usd or 0,
+                            "EOD stop-loss close: %s %s ×%.4f | orderId=%s | P&L=%.2f",
+                            close_result["action"], sym, qty,
+                            close_result["order_id"] or "", pnl_usd or 0,
                         )
                     except Exception as exc:
                         review["action"]       = "close_failed"
@@ -2168,6 +2688,14 @@ def _run_scan(
     if buying_power <= 0:
         logger.error("Cash balance is $0 — skipping trades (API may be down)")
 
+    # Conflict check — alert on misconfigured watchlist, build blocked set
+    conflicts = _check_watchlist_conflicts()
+    conflicted_bases: set[str] = set(conflicts.keys())
+
+    # Blacklist enforcement: liquidate any positions in blacklisted tickers immediately
+    if positions:
+        _sell_blacklisted_positions(client, positions, buying_power, conflicted_bases)
+
     if risk_manager is None:
         risk_manager = RiskManager(account_size=buying_power)
 
@@ -2176,9 +2704,14 @@ def _run_scan(
     scanner = scanner or SentimentScanner(broker_client=client)
     all_results = scanner.scan()
 
+    # Drop conflicted tickers from results before trading — they're blocked until config is fixed
+    if conflicted_bases:
+        all_results = [ts for ts in all_results if ts.ticker not in conflicted_bases]
+        logger.warning("Conflict filter: skipping %s (in multiple watchlist tiers)", sorted(conflicted_bases))
+
     # EDGAR 8-K scan — runs alongside regular sentiment scan
     edgar_signals: dict[str, dict] = {}
-    _edgar_watchlist = [t for t in settings.WATCHLIST if t not in settings.BLACKLIST]
+    _edgar_watchlist = [t for t in settings.WATCHLIST if t not in settings.BLACKLIST and t not in conflicted_bases]
     edgar_stats = {"scanned": len(_edgar_watchlist), "high_impact": 0, "sent_to_claude": 0}
     try:
         from sentiment.edgar_monitor import scan_watchlist as _edgar_scan
@@ -2210,14 +2743,12 @@ def _run_scan(
     except Exception as exc:
         logger.warning("Could not fetch VIX level (non-fatal): %s", exc)
 
-    # Pull macro summary for the email
+    # Pull macro summary for the email and cache full signal for macro_trader
     macro_summary = ""
     try:
-        from sentiment.news_macro import fetch_macro_headlines, score_macro_sentiment
-        headlines = fetch_macro_headlines()
-        if headlines:
-            scored = score_macro_sentiment(headlines)
-            macro_summary = scored.get("summary", "")
+        from sentiment.news_macro import get_full_macro_signal
+        full_signal = get_full_macro_signal()
+        macro_summary = full_signal.get("summary", "")
     except Exception:
         pass
 

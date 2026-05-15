@@ -57,7 +57,14 @@ _SYSTEM_PROMPT = (
     "(within 5% of current price), 30-45 DTE minimum, and only on liquid names with a clear "
     "near-term catalyst. Never recommend deep OTM contracts on beaten-down names without a "
     "specific identifiable catalyst (earnings, FDA, acquisition). "
-    "Directional bias rules: "
+    "Tiered watchlist bias rules (CRITICAL — these override all other signals): "
+    "Each ticker has a 'bias' field in sentiment: 'bullish', 'bearish', or 'neutral'. "
+    "BULLISH bias: recommend calls only. NEVER recommend a put on a bullish ticker. "
+    "BEARISH bias: recommend puts only. NEVER recommend a call on a bearish ticker. "
+    "NEUTRAL bias: recommend calls for bullish signals, puts for bearish signals. "
+    "Puts require score <= -0.35 to execute (higher bar than calls at -0.20). "
+    "If you recommend a direction that conflicts with the bias, set execute=false instead. "
+    "Additional directional rules: "
     "When a symbol is SPY, QQQ, or IWM and the sentiment score is strongly negative "
     "(below -0.35) AND macro score is also negative, flag as a put spread candidate in the signal. "
     "When a symbol is an oil/energy name (XLE, OXY, CVX, XOM, BNO) and macro headlines "
@@ -240,6 +247,7 @@ def build_data_bundle(
             "symbol":       ts.ticker,
             "score":        round(ts.score, 4),
             "direction":    ts.signal,
+            "bias":         getattr(ts, "bias", "neutral"),
             "confidence":   confidence,
             "headline":     headline,
             "source":       source,

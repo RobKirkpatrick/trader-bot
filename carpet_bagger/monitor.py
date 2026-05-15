@@ -20,7 +20,9 @@ from carpet_bagger.models import WatchlistRecord
 from carpet_bagger.strategy import (
     STOP_LOSS, TAKE_PROFIT, MAX_POSITIONS, MAX_POSITION_PCT, MAX_POSITION_DOLLARS,
     PRE_GAME_MIN, PRE_GAME_MAX,
-    get_take_profit,
+    get_take_profit, get_min_entry_prob, get_max_entry_hour_et,
+    get_trailing_stop_activation, get_trailing_stop_drop, get_late_game_threshold,
+    LATE_GAME_EXIT_PROB,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,6 +124,73 @@ def _count_bought(records: list[WatchlistRecord]) -> int:
     return sum(1 for r in records if r.status == "bought")
 
 
+# ---------------------------------------------------------------------------
+# Phase B helpers — trailing stop + late-game exits
+# ---------------------------------------------------------------------------
+
+def _update_peak_prob(record: WatchlistRecord, current_prob: float) -> bool:
+    """Update peak_prob on the record if current is higher. Returns True if new peak."""
+    if current_prob > record.peak_prob:
+        logger.debug("[%s] peak_prob updated: %.4f → %.4f", record.market_ticker, record.peak_prob, current_prob)
+        record.peak_prob = current_prob
+        return True
+    return False
+
+
+def _check_trailing_stop(record: WatchlistRecord, current_prob: float) -> tuple[bool, str]:
+    """
+    Check if trailing stop should trigger.
+
+    Trailing stop activates once peak_prob >= activation threshold.
+    If peak then drops by trailing_stop_drop amount, exit immediately.
+
+    Returns:
+        (should_trigger, reason_string)
+    """
+    activation  = get_trailing_stop_activation(record.sport)
+    drop_amount = get_trailing_stop_drop(record.sport)
+    logger.debug(
+        "[%s] _check_trailing_stop: peak=%.4f current=%.4f activation=%.4f drop_threshold=%.4f",
+        record.market_ticker, record.peak_prob, current_prob, activation, drop_amount,
+    )
+
+    if record.peak_prob < activation:
+        return False, ""
+
+    drop_from_peak = record.peak_prob - current_prob
+    if drop_from_peak >= drop_amount:
+        reason = (
+            f"TRAILING STOP: peak={record.peak_prob:.4f}, "
+            f"current={current_prob:.4f}, drop={drop_from_peak:.4f} "
+            f"(threshold={drop_amount:.4f})"
+        )
+        return True, reason
+
+    return False, ""
+
+
+def _check_late_game_exit(record: WatchlistRecord, current_prob: float) -> tuple[bool, str]:
+    """
+    Check if probability is so high that game is decided — exit now rather than
+    waiting for the resting sell.
+
+    Returns:
+        (should_trigger, reason_string)
+    """
+    threshold = get_late_game_threshold(record.sport)
+    logger.debug(
+        "[%s] _check_late_game_exit: current=%.4f threshold=%.4f",
+        record.market_ticker, current_prob, threshold,
+    )
+    if current_prob >= threshold:
+        reason = (
+            f"LATE-GAME EXIT: prob={current_prob:.4f} >= "
+            f"threshold={threshold:.4f} (game likely decided)"
+        )
+        return True, reason
+    return False, ""
+
+
 def _process_watching(
     record: WatchlistRecord,
     client: KalshiClient,
@@ -173,10 +242,19 @@ def _process_watching(
             except ValueError:
                 pass
 
-        # Price must still be in the buy window (55–75%)
-        if not (PRE_GAME_MIN <= yes_ask <= PRE_GAME_MAX):
-            logger.debug("Game %s at %.0f%% — outside buy window [%.0f%%–%.0f%%]",
-                         record.market_ticker, yes_ask * 100, PRE_GAME_MIN * 100, PRE_GAME_MAX * 100)
+        # Price must be in the buy window, with per-sport floor (e.g. MLB requires ≥0.62)
+        sport_min = get_min_entry_prob(record.sport)
+        if not (sport_min <= yes_ask <= PRE_GAME_MAX):
+            logger.debug("Game %s at %.0f%% — outside buy window [%.0f%%–%.0f%%] (sport_min=%.0f%%)",
+                         record.market_ticker, yes_ask * 100, sport_min * 100, PRE_GAME_MAX * 100, sport_min * 100)
+            record.current_prob = yes_ask
+            _update_record(record)
+            return 0.0
+
+        # Per-sport late-night cutoff (MLB: no new entries after 9pm ET — late west coast games)
+        max_hour = get_max_entry_hour_et(record.sport)
+        if _et_hour() >= max_hour:
+            logger.debug("Game %s — past per-sport entry cutoff (%d ET for %s)", record.market_ticker, max_hour, record.sport)
             record.current_prob = yes_ask
             _update_record(record)
             return 0.0
@@ -233,11 +311,12 @@ def _process_bought(record: WatchlistRecord, client: KalshiClient) -> None:
     """
     Manage a bought position.
 
-    The resting $0.97 sell limit handles profit-taking automatically.
-    This function only needs to:
-      1. Detect settlement (game ended) and record P&L.
-      2. Ensure a resting sell is in place (place one if missing after a failed attempt).
-      3. Trigger stop-loss if price drops below $0.45 (market flipped — get out).
+    Exit priority (checked in order):
+      1. Market settled → record P&L and close.
+      2. Late-game high-prob → cancel resting sell, market-sell immediately.
+      3. Trailing stop → cancel resting sell, market-sell immediately.
+      4. Hard stop-loss (45%) → cancel resting sell, market-sell immediately.
+      5. Ensure resting sell is in place (retry if missing).
     """
     try:
         market = client.get_market(record.market_ticker)
@@ -249,7 +328,10 @@ def _process_bought(record: WatchlistRecord, client: KalshiClient) -> None:
     yes_ask = parse_market_price(market, "yes_ask")
     record.current_prob = yes_ask
 
-    # Market settled — the resting sell either filled or auto-cancelled; record outcome
+    # Always update peak_prob on every monitor cycle
+    _update_peak_prob(record, yes_ask)
+
+    # --- EXIT 1: Market settled ---
     if market_status in ("finalized", "settled", "resolved"):
         result = market.get("result", "")
         pnl = (1.0 - record.entry_price) * record.contract_count if result == "yes" else -record.entry_price * record.contract_count
@@ -264,7 +346,26 @@ def _process_bought(record: WatchlistRecord, client: KalshiClient) -> None:
         _publish_sns(msg, f"[TraderBot] Carpet Bagger: Settled {record.teams} ({outcome})")
         return
 
-    # Ensure resting sell is in place — retry if the initial placement failed
+    # --- EXIT 2: Late-game high-confidence exit ---
+    should_late_exit, late_reason = _check_late_game_exit(record, yes_ask)
+    if should_late_exit:
+        logger.info("[%s] %s", record.market_ticker, late_reason)
+        _sell_position(record, client, yes_ask, reason="late_game_exit")
+        return
+
+    # --- EXIT 3: Trailing stop ---
+    should_trailing, trailing_reason = _check_trailing_stop(record, yes_ask)
+    if should_trailing:
+        logger.warning("[%s] %s", record.market_ticker, trailing_reason)
+        _sell_position(record, client, yes_ask, reason="trailing_stop")
+        return
+
+    # --- EXIT 4: Hard stop-loss ---
+    if yes_ask < STOP_LOSS:
+        _sell_position(record, client, yes_ask, reason="stop_loss")
+        return
+
+    # --- HOLD: Ensure resting sell is in place ---
     if not record.sell_order_id and record.contract_count > 0:
         try:
             sell_result   = client.place_sell(record.market_ticker, record.contract_count, yes_bid_dollars=get_take_profit(record.sport))
@@ -274,12 +375,6 @@ def _process_bought(record: WatchlistRecord, client: KalshiClient) -> None:
         except Exception as exc:
             logger.warning("Resting sell retry failed for %s: %s", record.market_ticker, exc)
 
-    # Stop-loss: price fell below $0.45 — market has flipped, exit immediately
-    if yes_ask < STOP_LOSS:
-        _sell_position(record, client, yes_ask, reason="stop_loss")
-        return
-
-    # Holding — resting sell will auto-fill at $0.97 when the market gets there
     _update_record(record)
 
 
@@ -431,9 +526,14 @@ def _scan_live_games(
             else:
                 continue  # no open_time — can't confirm in progress
 
-            # Probability filter: 55–75%
+            # Probability filter
             yes_ask = parse_market_price(market, "yes_ask")
-            if not (PRE_GAME_MIN <= yes_ask <= PRE_GAME_MAX):
+            sport_min = get_min_entry_prob(series)
+            if not (sport_min <= yes_ask <= PRE_GAME_MAX):
+                continue
+
+            # Per-sport late-night cutoff
+            if _et_hour() >= get_max_entry_hour_et(series):
                 continue
 
             # Budget

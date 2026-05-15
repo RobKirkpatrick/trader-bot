@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 import requests
 
-from config.settings import settings
+from config.settings import settings, get_ticker_bias
 from sentiment.news_macro import get_macro_sentiment, score_tickers_from_prices
 from sentiment.market_data import fetch_price_signals
 from sentiment.earnings import earnings_catalyst_scores
@@ -86,6 +86,7 @@ class TickerSentiment:
     article_count: int = 0
     earnings_imminent: bool = False  # reports within 7 days
     signal: str = "neutral"         # "bullish" | "bearish" | "neutral"
+    bias: str = "neutral"           # "bullish" | "bearish" | "neutral" — from tiered watchlist
     articles: list[ArticleSentiment] = field(default_factory=list)
     macro_events: list[str] = field(default_factory=list)  # top headlines from today's macro scan
 
@@ -246,6 +247,7 @@ class SentimentScanner:
                 earnings_surprise=earn_surprise,
                 earnings_imminent=(earn_boost > 0),
                 signal=signal,
+                bias=get_ticker_bias(ticker),
                 macro_events=macro_events[:5],
             )
             results.append(ts)

@@ -54,9 +54,11 @@ pip3 install \
 echo "[3/5] Copying source files..."
 cp "${DEPLOY_DIR}/lambda_function.py" "${BUILD_DIR}/"
 
-for pkg in config broker core sentiment scheduler api carpet_bagger data; do
+for pkg in config broker core sentiment scheduler api carpet_bagger data bracket_buster macro_trader funding_rate political_trader weather_trader; do
     cp -r "${DEPLOY_DIR}/${pkg}" "${BUILD_DIR}/"
 done
+mkdir -p "${BUILD_DIR}/docs"
+cp "${DEPLOY_DIR}/docs/settings.html" "${BUILD_DIR}/docs/"
 
 # ---------------------------------------------------------------------------
 # 4. Zip everything
@@ -158,6 +160,31 @@ aws iam put-role-policy \
     --output text > /dev/null 2>&1 && echo "    Lambda log-read policy applied to: ${EXEC_ROLE}" || \
     echo "    (Skipped log-read policy — check IAM role manually if EOD recap is blank)"
 
+# Secrets Manager — read + write (kill switch and settings panel need PutSecretValue)
+aws iam put-role-policy \
+    --role-name "${EXEC_ROLE}" \
+    --policy-name "trading-bot-permissions" \
+    --policy-document "{
+      \"Version\": \"2012-10-17\",
+      \"Statement\": [
+        {
+          \"Effect\": \"Allow\",
+          \"Action\": [\"secretsmanager:GetSecretValue\", \"secretsmanager:PutSecretValue\"],
+          \"Resource\": \"arn:aws:secretsmanager:${REGION}:*:secret:trading-bot/secrets*\"
+        },
+        {
+          \"Effect\": \"Allow\",
+          \"Action\": \"sns:Publish\",
+          \"Resource\": [
+            \"arn:aws:sns:us-east-1:${ACCOUNT_ID}:TraderBot\",
+            \"arn:aws:sns:${REGION}:${ACCOUNT_ID}:trading-alerts\"
+          ]
+        }
+      ]
+    }" \
+    --output text > /dev/null 2>&1 && echo "    Secrets Manager read/write policy applied" || \
+    echo "    (Skipped Secrets Manager policy)"
+
 # Disable old EventBridge Rules (replaced by Scheduler — idempotent)
 for OLD_RULE in trading-bot-pre-market trading-bot-market-open trading-bot-midday; do
     aws events disable-rule --name "${OLD_RULE}" --region "${REGION}" \
@@ -243,6 +270,22 @@ _upsert_schedule "carpet-bagger-summary" "59 23 ? * MON-SUN *"  "carpet_bagger_s
 # EDGAR 8-K monitor — stock catalyst detection, every 5 min during market hours
 _upsert_schedule "edgar-monitor" "0/5 8-16 ? * MON-FRI *" "edgar_scan" "EDGAR 8-K monitor every 5 min 8am-4pm ET weekdays"
 
+# Macro Trader — Kalshi economic prediction market bridge
+_upsert_schedule "macro-trader-scanner" "0 0,6,12,18 ? * MON-FRI *" "macro_trader_scanner" "Macro Trader scanner every 6 hours weekdays"
+_upsert_schedule "macro-trader-monitor" "0 0,4,8,12,16,20 ? * MON-FRI *" "macro_trader_monitor" "Macro Trader monitor every 4 hours weekdays"
+
+# Coinbase Basis Arb (funding_rate module) — crypto runs 24/7
+_upsert_schedule "funding-rate-scanner" "0 0,4,8,12,16,20 ? * MON-SUN *" "funding_rate_scanner" "Coinbase basis arb scanner every 4 hours daily"
+_upsert_schedule "funding-rate-monitor" "0 * ? * MON-SUN *" "funding_rate_monitor" "Coinbase basis arb monitor every hour daily"
+
+# Political Trader — Kalshi political prediction markets
+_upsert_schedule "political-trader-scanner" "0 0,6,12,18 ? * MON-SUN *" "political_trader_scanner" "Political Trader scanner every 6 hours daily"
+_upsert_schedule "political-trader-monitor" "0 0,8,16 ? * MON-SUN *"    "political_trader_monitor" "Political Trader monitor every 8 hours daily"
+
+# Weather Trader — NWS-edge Kalshi weather prediction markets
+_upsert_schedule "weather-trader-scanner" "0 0,4,8,12,16,20 ? * MON-SUN *" "weather_trader_scanner" "Weather Trader scanner every 4 hours daily"
+_upsert_schedule "weather-trader-monitor" "0 0,6,12,18 ? * MON-SUN *"      "weather_trader_monitor" "Weather Trader monitor every 6 hours daily"
+
 # Hormuz macro trade monitor — daily P&L check at 4:00 PM ET (after market close)
 _upsert_schedule "hormuz-monitor" "0 16 ? * MON-FRI *" "hormuz_monitor" "Hormuz trade P&L monitor 16:00 ET weekdays"
 
@@ -319,6 +362,53 @@ else
     echo "    Table '${LOG_TABLE}' created (PAY_PER_REQUEST)"
 fi
 
+# ---------------------------------------------------------------------------
+# 6b3. Macro Trader DynamoDB tables (3x — idempotent)
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Macro Trader DynamoDB tables ==="
+
+for MT_TABLE in "macro-signal-cache:signal_date:S" "macro-opportunities:opportunity_id:S" "macro-positions:position_id:S"; do
+    MT_NAME="${MT_TABLE%%:*}"
+    MT_REST="${MT_TABLE#*:}"
+    MT_KEY="${MT_REST%%:*}"
+    MT_TYPE="${MT_REST#*:}"
+    if aws dynamodb describe-table --table-name "${MT_NAME}" --region "${REGION}" \
+            --output text > /dev/null 2>&1; then
+        echo "    Table '${MT_NAME}' already exists — skipping"
+    else
+        echo "    Creating '${MT_NAME}'..."
+        aws dynamodb create-table \
+            --table-name "${MT_NAME}" \
+            --attribute-definitions "AttributeName=${MT_KEY},AttributeType=${MT_TYPE}" \
+            --key-schema "AttributeName=${MT_KEY},KeyType=HASH" \
+            --billing-mode PAY_PER_REQUEST \
+            --region "${REGION}" \
+            --output text > /dev/null
+        aws dynamodb wait table-exists --table-name "${MT_NAME}" --region "${REGION}"
+        echo "    Table '${MT_NAME}' created"
+    fi
+done
+
+# Grant Lambda execution role read/write access to macro trader tables
+aws iam put-role-policy \
+    --role-name "${EXEC_ROLE}" \
+    --policy-name "macro-trader-dynamodb" \
+    --policy-document "{
+      \"Version\": \"2012-10-17\",
+      \"Statement\": [{
+        \"Effect\": \"Allow\",
+        \"Action\": [\"dynamodb:GetItem\",\"dynamodb:PutItem\",\"dynamodb:UpdateItem\",\"dynamodb:Scan\",\"dynamodb:Query\",\"dynamodb:BatchWriteItem\"],
+        \"Resource\": [
+          \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/macro-signal-cache\",
+          \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/macro-opportunities\",
+          \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/macro-positions\"
+        ]
+      }]
+    }" \
+    --output text > /dev/null && echo "    DynamoDB policy applied for macro trader tables" || \
+    echo "    (Macro trader DynamoDB policy — check IAM role manually)"
+
 # Grant Lambda execution role access to the logs table
 aws iam put-role-policy \
     --role-name "${EXEC_ROLE}" \
@@ -334,6 +424,224 @@ aws iam put-role-policy \
     --output text > /dev/null 2>&1 && \
     echo "    DynamoDB policy applied to Lambda role: ${EXEC_ROLE} (logs table)" || \
     echo "    (Skipped DynamoDB logs policy — check IAM role manually)"
+
+# ---------------------------------------------------------------------------
+# 6b3. Bracket Buster DynamoDB tables
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Bracket Buster DynamoDB tables ==="
+
+for BB_TABLE in "bracket-buster-opportunities" "bracket-buster-positions"; do
+    if aws dynamodb describe-table --table-name "${BB_TABLE}" --region "${REGION}" \
+            --output text > /dev/null 2>&1; then
+        echo "    Table '${BB_TABLE}' already exists — skipping"
+    else
+        echo "    Creating DynamoDB table '${BB_TABLE}'..."
+        PARTITION_KEY="opportunity_id"
+        if [ "${BB_TABLE}" = "bracket-buster-positions" ]; then
+            PARTITION_KEY="position_id"
+        fi
+        aws dynamodb create-table \
+            --table-name "${BB_TABLE}" \
+            --attribute-definitions AttributeName="${PARTITION_KEY}",AttributeType=S \
+            --key-schema AttributeName="${PARTITION_KEY}",KeyType=HASH \
+            --billing-mode PAY_PER_REQUEST \
+            --region "${REGION}" \
+            --output text > /dev/null
+        echo "    Waiting for table to become active..."
+        aws dynamodb wait table-exists --table-name "${BB_TABLE}" --region "${REGION}"
+        echo "    Table '${BB_TABLE}' created (PAY_PER_REQUEST)"
+    fi
+
+    aws iam put-role-policy \
+        --role-name "${EXEC_ROLE}" \
+        --policy-name "bracket-buster-dynamodb-${BB_TABLE}" \
+        --policy-document "{
+          \"Version\": \"2012-10-17\",
+          \"Statement\": [{
+            \"Effect\": \"Allow\",
+            \"Action\": [
+              \"dynamodb:PutItem\",
+              \"dynamodb:GetItem\",
+              \"dynamodb:UpdateItem\",
+              \"dynamodb:DeleteItem\",
+              \"dynamodb:Scan\",
+              \"dynamodb:Query\"
+            ],
+            \"Resource\": \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${BB_TABLE}\"
+          }]
+        }" \
+        --output text > /dev/null 2>&1 && \
+        echo "    DynamoDB policy applied for: ${BB_TABLE}" || \
+        echo "    (Skipped DynamoDB policy for ${BB_TABLE} — check IAM role manually)"
+done
+
+# ---------------------------------------------------------------------------
+# 6b3b. Funding Rate (Coinbase basis arb) DynamoDB tables
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Funding Rate DynamoDB tables ==="
+
+for FR_TABLE in "funding-rate-opportunities:opportunity_id:S" "funding-rate-positions:position_id:S"; do
+    FR_NAME="${FR_TABLE%%:*}"
+    FR_REST="${FR_TABLE#*:}"
+    FR_KEY="${FR_REST%%:*}"
+    FR_TYPE="${FR_REST#*:}"
+    if aws dynamodb describe-table --table-name "${FR_NAME}" --region "${REGION}" \
+            --output text > /dev/null 2>&1; then
+        echo "    Table '${FR_NAME}' already exists — skipping"
+    else
+        echo "    Creating '${FR_NAME}'..."
+        aws dynamodb create-table \
+            --table-name "${FR_NAME}" \
+            --attribute-definitions "AttributeName=${FR_KEY},AttributeType=${FR_TYPE}" \
+            --key-schema "AttributeName=${FR_KEY},KeyType=HASH" \
+            --billing-mode PAY_PER_REQUEST \
+            --region "${REGION}" \
+            --output text > /dev/null
+        aws dynamodb wait table-exists --table-name "${FR_NAME}" --region "${REGION}"
+        echo "    Table '${FR_NAME}' created"
+    fi
+done
+
+aws iam put-role-policy \
+    --role-name "${EXEC_ROLE}" \
+    --policy-name "funding-rate-dynamodb" \
+    --policy-document "{
+      \"Version\": \"2012-10-17\",
+      \"Statement\": [{
+        \"Effect\": \"Allow\",
+        \"Action\": [\"dynamodb:GetItem\",\"dynamodb:PutItem\",\"dynamodb:UpdateItem\",\"dynamodb:DeleteItem\",\"dynamodb:Scan\",\"dynamodb:Query\"],
+        \"Resource\": [
+          \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/funding-rate-opportunities\",
+          \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/funding-rate-positions\"
+        ]
+      }]
+    }" \
+    --output text > /dev/null && echo "    DynamoDB policy applied for funding rate tables" || \
+    echo "    (Funding rate DynamoDB policy — check IAM role manually)"
+
+# ---------------------------------------------------------------------------
+# 6b4. Political Trader DynamoDB tables
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Political Trader DynamoDB tables ==="
+
+# political-opportunities — composite key (market_ticker HASH, scanned_at SORT)
+if aws dynamodb describe-table --table-name "political-opportunities" --region "${REGION}" \
+        --output text > /dev/null 2>&1; then
+    echo "    Table 'political-opportunities' already exists — skipping"
+else
+    echo "    Creating 'political-opportunities'..."
+    aws dynamodb create-table \
+        --table-name "political-opportunities" \
+        --attribute-definitions \
+            AttributeName=market_ticker,AttributeType=S \
+            AttributeName=scanned_at,AttributeType=S \
+        --key-schema \
+            AttributeName=market_ticker,KeyType=HASH \
+            AttributeName=scanned_at,KeyType=RANGE \
+        --billing-mode PAY_PER_REQUEST \
+        --region "${REGION}" \
+        --output text > /dev/null
+    aws dynamodb wait table-exists --table-name "political-opportunities" --region "${REGION}"
+    echo "    Table 'political-opportunities' created"
+fi
+
+# political-positions — simple key (position_id HASH)
+if aws dynamodb describe-table --table-name "political-positions" --region "${REGION}" \
+        --output text > /dev/null 2>&1; then
+    echo "    Table 'political-positions' already exists — skipping"
+else
+    echo "    Creating 'political-positions'..."
+    aws dynamodb create-table \
+        --table-name "political-positions" \
+        --attribute-definitions AttributeName=position_id,AttributeType=S \
+        --key-schema AttributeName=position_id,KeyType=HASH \
+        --billing-mode PAY_PER_REQUEST \
+        --region "${REGION}" \
+        --output text > /dev/null
+    aws dynamodb wait table-exists --table-name "political-positions" --region "${REGION}"
+    echo "    Table 'political-positions' created"
+fi
+
+aws iam put-role-policy \
+    --role-name "${EXEC_ROLE}" \
+    --policy-name "political-trader-dynamodb" \
+    --policy-document "{
+      \"Version\": \"2012-10-17\",
+      \"Statement\": [{
+        \"Effect\": \"Allow\",
+        \"Action\": [\"dynamodb:GetItem\",\"dynamodb:PutItem\",\"dynamodb:UpdateItem\",\"dynamodb:Scan\",\"dynamodb:Query\",\"dynamodb:DeleteItem\"],
+        \"Resource\": [
+          \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/political-opportunities\",
+          \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/political-positions\"
+        ]
+      }]
+    }" \
+    --output text > /dev/null && echo "    DynamoDB policy applied for political trader tables" || \
+    echo "    (Political trader DynamoDB policy — check IAM role manually)"
+
+# ---------------------------------------------------------------------------
+# 6b5. Weather Trader DynamoDB tables
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Weather Trader DynamoDB tables ==="
+
+# weather-opportunities — composite key (market_ticker HASH, scanned_at SORT)
+if aws dynamodb describe-table --table-name "weather-opportunities" --region "${REGION}" \
+        --output text > /dev/null 2>&1; then
+    echo "    Table 'weather-opportunities' already exists — skipping"
+else
+    echo "    Creating 'weather-opportunities'..."
+    aws dynamodb create-table \
+        --table-name "weather-opportunities" \
+        --attribute-definitions \
+            AttributeName=market_ticker,AttributeType=S \
+            AttributeName=scanned_at,AttributeType=S \
+        --key-schema \
+            AttributeName=market_ticker,KeyType=HASH \
+            AttributeName=scanned_at,KeyType=RANGE \
+        --billing-mode PAY_PER_REQUEST \
+        --region "${REGION}" \
+        --output text > /dev/null
+    aws dynamodb wait table-exists --table-name "weather-opportunities" --region "${REGION}"
+    echo "    Table 'weather-opportunities' created"
+fi
+
+# weather-positions — simple key (position_id HASH)
+if aws dynamodb describe-table --table-name "weather-positions" --region "${REGION}" \
+        --output text > /dev/null 2>&1; then
+    echo "    Table 'weather-positions' already exists — skipping"
+else
+    echo "    Creating 'weather-positions'..."
+    aws dynamodb create-table \
+        --table-name "weather-positions" \
+        --attribute-definitions AttributeName=position_id,AttributeType=S \
+        --key-schema AttributeName=position_id,KeyType=HASH \
+        --billing-mode PAY_PER_REQUEST \
+        --region "${REGION}" \
+        --output text > /dev/null
+    aws dynamodb wait table-exists --table-name "weather-positions" --region "${REGION}"
+    echo "    Table 'weather-positions' created"
+fi
+
+aws iam put-role-policy \
+    --role-name "${EXEC_ROLE}" \
+    --policy-name "weather-trader-dynamodb" \
+    --policy-document "{
+      \"Version\": \"2012-10-17\",
+      \"Statement\": [{
+        \"Effect\": \"Allow\",
+        \"Action\": [\"dynamodb:GetItem\",\"dynamodb:PutItem\",\"dynamodb:UpdateItem\",\"dynamodb:Scan\",\"dynamodb:Query\",\"dynamodb:DeleteItem\"],
+        \"Resource\": [
+          \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/weather-opportunities\",
+          \"arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/weather-positions\"
+        ]
+      }]
+    }" \
+    --output text > /dev/null && echo "    DynamoDB policy applied for weather trader tables" || \
+    echo "    (Weather trader DynamoDB policy — check IAM role manually)"
 
 # Grant Lambda execution role DynamoDB access for the Carpet Bagger table
 aws iam put-role-policy \
@@ -393,7 +701,7 @@ INT_ID=$(aws apigatewayv2 create-integration \
     --query IntegrationId --output text)
 
 # Upsert routes (idempotent — create-route is a no-op if it already exists)
-for ROUTE_KEY in "GET /approve" "GET /balance" "GET /orders" "POST /orders/new" "POST /orders/{orderId}/edit"; do
+for ROUTE_KEY in "GET /approve" "GET /balance" "GET /orders" "POST /orders/new" "POST /orders/{orderId}/edit" "GET /killswitch" "GET /settings" "POST /settings"; do
     aws apigatewayv2 create-route \
         --api-id "${API_ID}" \
         --route-key "${ROUTE_KEY}" \
@@ -406,8 +714,7 @@ done
 # Configure CORS — required so the settings UI can call /orders with Authorization header
 aws apigatewayv2 update-api \
     --api-id "${API_ID}" \
-    --cors-configuration \
-      "AllowOrigins='*',AllowHeaders='Authorization,Content-Type',AllowMethods='GET,POST,OPTIONS'" \
+    --cors-configuration '{"AllowOrigins":["*"],"AllowHeaders":["Authorization","Content-Type"],"AllowMethods":["GET","POST","OPTIONS"],"MaxAge":300}' \
     --region "${REGION}" \
     --output text > /dev/null && echo "    CORS configured on API Gateway"
 
@@ -455,16 +762,145 @@ aws lambda update-function-configuration \
 echo "    Approval endpoint: ${API_URL}/approve?ticker=AAPL&..."
 
 # ---------------------------------------------------------------------------
-# 6d. Suggestion token secret — generate once, store in Secrets Manager
+# 6d. Sync .env settings → Secrets Manager
+#     Cloud-first: pull Secrets Manager values into .env before merging,
+#     so changes made via the settings panel survive redeploys.
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== Suggestion token secret ==="
+echo "=== Syncing .env → Secrets Manager ==="
 
 EXISTING_SECRET_JSON=$(aws secretsmanager get-secret-value \
     --secret-id "trading-bot/secrets" \
     --region "${REGION}" \
     --query "SecretString" \
     --output text 2>/dev/null || echo "{}")
+
+# Pull cloud-managed keys back into .env so they aren't overwritten by a stale local value.
+# Keys that are safe to pull from SM → .env (excludes raw private keys / API secrets).
+if [ "${EXISTING_SECRET_JSON}" != "{}" ] && [ -f "${DEPLOY_DIR}/.env" ]; then
+    python3 - "${EXISTING_SECRET_JSON}" "${DEPLOY_DIR}/.env" << 'PULL_PYEOF'
+import json, sys, re
+
+sm      = json.loads(sys.argv[1])
+env_path = sys.argv[2]
+
+# Keys managed by the cloud settings panel — SM is authoritative for these
+cloud_keys = {
+    "TRADING_PAUSED", "REQUIRE_SELL_APPROVAL", "TRADE_DEBUG",
+    "RISK_TOLERANCE", "OPTIONS_CALLS_ENABLED",
+    "CARPET_BAGGER_ENABLED", "CARPET_BAGGER_MAX_POSITION",
+    "BRACKET_BUSTER_ENABLED", "BRACKET_BUSTER_MAX_POSITION",
+    "MACRO_TRADER_ENABLED", "MACRO_TRADER_MAX_POSITION",
+    "MACRO_TRADER_MIN_SIGNAL", "MACRO_TRADER_MIN_CONFIDENCE",
+    "MACRO_TRADER_MIN_EDGE", "MACRO_TRADER_MAX_BID_ASK_SPREAD",
+    "POLITICAL_TRADER_ENABLED", "POLITICAL_TRADER_MAX_POSITION",
+    "POLITICAL_TRADER_MIN_SIGNAL", "POLITICAL_TRADER_MIN_CONFIDENCE",
+    "WEATHER_TRADER_ENABLED", "WEATHER_TRADER_MAX_POSITION", "WEATHER_TRADER_MIN_EDGE",
+    "FUNDING_RATE_ENABLED", "FUNDING_RATE_MAX_POSITION", "FUNDING_RATE_MIN_APR",
+    "CRYPTO_ENABLED",
+    "WATCHLIST_BEARISH", "WATCHLIST_BULLISH", "WATCHLIST_NEUTRAL", "BLACKLIST",
+}
+
+with open(env_path) as f:
+    lines = f.readlines()
+
+updated = []
+for line in lines:
+    stripped = line.rstrip('\n')
+    m = re.match(r'^([A-Z_][A-Z0-9_]*)=', stripped)
+    if m and m.group(1) in cloud_keys and m.group(1) in sm:
+        val = sm[m.group(1)]
+        # Quote if contains spaces or special chars
+        if any(c in val for c in (' ', '\n', '"', "'")):
+            val = '"' + val.replace('"', '\\"') + '"'
+        updated.append(f"{m.group(1)}={val}\n")
+    else:
+        updated.append(line if line.endswith('\n') else line + '\n')
+
+with open(env_path, 'w') as f:
+    f.writelines(updated)
+PULL_PYEOF
+    echo "    Pulled cloud-managed keys from Secrets Manager → .env"
+fi
+
+# Keys to sync from .env (excludes secrets that are generated or managed separately)
+ENV_SYNC_KEYS="BLACKLIST WATCHLIST_BEARISH WATCHLIST_BULLISH WATCHLIST_NEUTRAL RISK_TOLERANCE OPTIONS_CALLS_ENABLED REQUIRE_SELL_APPROVAL \
+TRADING_PAUSED TRADE_DEBUG CARPET_BAGGER_ENABLED CARPET_BAGGER_MAX_POSITION \
+BRACKET_BUSTER_ENABLED BRACKET_BUSTER_MAX_POSITION \
+FUNDING_RATE_ENABLED FUNDING_RATE_MAX_POSITION FUNDING_RATE_MIN_APR FUNDING_RATE_EXIT_APR \
+COINBASE_API_KEY_NAME COINBASE_PRIVATE_KEY \
+MACRO_TRADER_ENABLED MACRO_TRADER_MAX_POSITION MACRO_TRADER_MIN_SIGNAL MACRO_TRADER_MIN_CONFIDENCE \
+MACRO_TRADER_MIN_EDGE MACRO_TRADER_MAX_BID_ASK_SPREAD \
+PUBLIC_API_SECRET PUBLIC_ACCOUNT_ID POLYGON_API_KEY FINNHUB_API_KEY \
+MARKETAUX_API_KEY NEWS_API_KEY ALPHA_VANTAGE_API_KEY ANTHROPIC_API_KEY \
+KALSHI_API_KEY KALSHI_RSA_PRIVATE_KEY SNS_TOPIC_ARN LAMBDA_FUNCTION_URL \
+POLITICAL_TRADER_ENABLED POLITICAL_TRADER_MAX_POSITION POLITICAL_TRADER_MIN_SIGNAL POLITICAL_TRADER_MIN_CONFIDENCE \
+WEATHER_TRADER_ENABLED WEATHER_TRADER_MAX_POSITION WEATHER_TRADER_MIN_EDGE \
+CRYPTO_ENABLED"
+
+if [ -f "${DEPLOY_DIR}/.env" ]; then
+    SYNCED=$(python3 - "${EXISTING_SECRET_JSON}" "${DEPLOY_DIR}/.env" << 'PYEOF'
+import json, sys, re
+
+secret = json.loads(sys.argv[1])
+env_path = sys.argv[2]
+sync_keys = set("""BLACKLIST WATCHLIST_BEARISH WATCHLIST_BULLISH WATCHLIST_NEUTRAL RISK_TOLERANCE OPTIONS_CALLS_ENABLED REQUIRE_SELL_APPROVAL
+TRADING_PAUSED TRADE_DEBUG CARPET_BAGGER_ENABLED CARPET_BAGGER_MAX_POSITION
+BRACKET_BUSTER_ENABLED BRACKET_BUSTER_MAX_POSITION
+FUNDING_RATE_ENABLED FUNDING_RATE_MAX_POSITION FUNDING_RATE_MIN_APR FUNDING_RATE_EXIT_APR
+COINBASE_API_KEY_NAME COINBASE_PRIVATE_KEY
+MACRO_TRADER_ENABLED MACRO_TRADER_MAX_POSITION MACRO_TRADER_MIN_SIGNAL MACRO_TRADER_MIN_CONFIDENCE
+MACRO_TRADER_MIN_EDGE MACRO_TRADER_MAX_BID_ASK_SPREAD
+PUBLIC_API_SECRET PUBLIC_ACCOUNT_ID POLYGON_API_KEY FINNHUB_API_KEY
+MARKETAUX_API_KEY NEWS_API_KEY ALPHA_VANTAGE_API_KEY ANTHROPIC_API_KEY
+KALSHI_API_KEY KALSHI_RSA_PRIVATE_KEY SNS_TOPIC_ARN LAMBDA_FUNCTION_URL
+POLITICAL_TRADER_ENABLED POLITICAL_TRADER_MAX_POSITION POLITICAL_TRADER_MIN_SIGNAL POLITICAL_TRADER_MIN_CONFIDENCE
+WEATHER_TRADER_ENABLED WEATHER_TRADER_MAX_POSITION WEATHER_TRADER_MIN_EDGE
+CRYPTO_ENABLED""".split())
+
+updated = []
+with open(env_path) as f:
+    for line in f:
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        k, _, v = line.partition('=')
+        k = k.strip()
+        if k in sync_keys and v.strip():
+            raw = v.strip()
+            # Strip outer quotes
+            if (raw.startswith('"') and raw.endswith('"')) or \
+               (raw.startswith("'") and raw.endswith("'")):
+                raw = raw[1:-1]
+            else:
+                # Strip inline comments only for unquoted values
+                raw = raw.split('#')[0].strip()
+            secret[k] = raw
+            updated.append(k)
+
+print(json.dumps(secret))
+print(' '.join(updated))
+PYEOF
+    )
+    UPDATED_SECRET=$(echo "$SYNCED" | head -1)
+    SYNCED_KEYS=$(echo "$SYNCED" | sed -n '2p')
+    aws secretsmanager update-secret \
+        --secret-id "trading-bot/secrets" \
+        --region "${REGION}" \
+        --secret-string "${UPDATED_SECRET}" \
+        --output text > /dev/null
+    echo "    Synced: $(echo $SYNCED_KEYS | tr '\n' ' ')"
+    # Update EXISTING_SECRET_JSON for the suggestion token step below
+    EXISTING_SECRET_JSON="${UPDATED_SECRET}"
+else
+    echo "    No .env file found — skipping sync"
+fi
+
+# ---------------------------------------------------------------------------
+# 6e. Suggestion token secret — generate once, store in Secrets Manager
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Suggestion token secret ==="
 
 if echo "${EXISTING_SECRET_JSON}" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'SUGGESTION_TOKEN_SECRET' in d else 1)" 2>/dev/null; then
     echo "    SUGGESTION_TOKEN_SECRET already in Secrets Manager — skipping generation"

@@ -20,12 +20,18 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
-_INDEX_SYMBOLS = {"SPX", "NDX", "VIX", "CBTX", "RUT", "DJX"}
+_INDEX_SYMBOLS  = {"SPX", "NDX", "VIX", "CBTX", "RUT", "DJX"}
+_CRYPTO_SYMBOLS = {"BTC", "ETH", "SOL", "DOGE", "AVAX", "LINK", "XRP", "ADA", "DOT"}
 
 
 def _instrument_type(symbol: str) -> str:
-    """Return Public.com instrument type for a symbol (INDEX or EQUITY)."""
-    return "INDEX" if symbol.upper() in _INDEX_SYMBOLS else "EQUITY"
+    """Return Public.com instrument type for a symbol (CRYPTO, INDEX, or EQUITY)."""
+    s = symbol.upper()
+    if s in _CRYPTO_SYMBOLS:
+        return "CRYPTO"
+    if s in _INDEX_SYMBOLS:
+        return "INDEX"
+    return "EQUITY"
 
 
 def _parse_osi_strike(osi_symbol: str) -> float:
@@ -144,7 +150,7 @@ class PublicClient:
         cash_balance  = float(bp.get("cashOnlyBuyingPower") or bp.get("buyingPower") or 0)
         buying_power  = float(bp.get("buyingPower") or bp.get("cashOnlyBuyingPower") or 0)
 
-        # Portfolio value: try common field paths
+        # Portfolio value: sum all equity buckets (CASH + STOCK + OPTIONS_LONG + etc.)
         portfolio_value = 0.0
         equity_list = portfolio.get("equity", [])
         if isinstance(equity_list, list) and equity_list:
@@ -152,8 +158,7 @@ class PublicClient:
                 v = item.get("value") or item.get("totalValue")
                 if v:
                     try:
-                        portfolio_value = float(v)
-                        break
+                        portfolio_value += float(v)
                     except (ValueError, TypeError):
                         pass
         if not portfolio_value:
@@ -263,7 +268,7 @@ class PublicClient:
         url = f"{self._BASE}/userapigateway/trading/{account_id}/preflight/single-leg"
 
         body: dict = {
-            "instrument": {"symbol": symbol.upper(), "type": "EQUITY"},
+            "instrument": {"symbol": symbol.upper(), "type": _instrument_type(symbol)},
             "orderSide": side.upper(),
             "orderType": order_type.upper(),
             "expiration": {"timeInForce": "DAY"},
@@ -300,7 +305,7 @@ class PublicClient:
 
         body: dict = {
             "orderId": order_id or str(uuid.uuid4()),
-            "instrument": {"symbol": symbol.upper(), "type": "EQUITY"},
+            "instrument": {"symbol": symbol.upper(), "type": _instrument_type(symbol)},
             "orderSide": side.upper(),
             "orderType": order_type.upper(),
             "expiration": {"timeInForce": "DAY"},
@@ -731,4 +736,86 @@ class PublicClient:
         resp.raise_for_status()
         result = resp.json()
         logger.info("Multi-leg order submitted: %s", result)
+        return result
+
+    # ------------------------------------------------------------------
+    # Crypto (spot — via Public.com / Zero Hash custody)
+    # ------------------------------------------------------------------
+
+    def get_crypto_quote(self, symbol: str) -> float:
+        """
+        Return current price for a spot crypto asset (BTC, ETH, SOL, etc.).
+        Returns 0.0 on failure.
+        """
+        account_id = self.get_account_id()
+        url = f"{self._BASE}/userapigateway/marketdata/{account_id}/quotes"
+        resp = requests.post(
+            url,
+            headers=self._headers(),
+            json={"instruments": [{"symbol": symbol.upper(), "type": "CRYPTO"}]},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        for q in data.get("quotes", []):
+            sym = (q.get("instrument", {}).get("symbol") or q.get("symbol") or "").upper()
+            if sym == symbol.upper():
+                for field in ("last", "lastPrice", "ask", "price"):
+                    v = q.get(field)
+                    if v:
+                        return float(v)
+        return 0.0
+
+    def place_crypto_buy(self, symbol: str, dollar_amount: float) -> dict:
+        """
+        Place a notional market buy order for a crypto asset.
+
+        Args:
+            symbol       : e.g. "BTC", "ETH", "SOL"
+            dollar_amount: USD amount to spend, e.g. 50.00
+
+        Returns { "orderId": "<uuid>" } on success.
+        """
+        account_id = self.get_account_id()
+        url = f"{self._BASE}/userapigateway/trading/{account_id}/order"
+        body = {
+            "orderId":    str(uuid.uuid4()),
+            "instrument": {"symbol": symbol.upper(), "type": "CRYPTO"},
+            "orderSide":  "BUY",
+            "orderType":  "MARKET",
+            "expiration": {"timeInForce": "DAY"},
+            "amount":     f"{dollar_amount:.2f}",
+        }
+        logger.info("Placing crypto BUY: %s $%.2f", symbol.upper(), dollar_amount)
+        resp = requests.post(url, headers=self._headers(), json=body, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        logger.info("Crypto buy submitted: %s", result)
+        return result
+
+    def place_crypto_sell(self, symbol: str, quantity: float) -> dict:
+        """
+        Place a market sell order for a crypto asset by quantity.
+
+        Args:
+            symbol  : e.g. "BTC", "ETH", "SOL"
+            quantity: amount of the asset to sell (not dollars), e.g. 0.001
+
+        Returns { "orderId": "<uuid>" } on success.
+        """
+        account_id = self.get_account_id()
+        url = f"{self._BASE}/userapigateway/trading/{account_id}/order"
+        body = {
+            "orderId":    str(uuid.uuid4()),
+            "instrument": {"symbol": symbol.upper(), "type": "CRYPTO"},
+            "orderSide":  "SELL",
+            "orderType":  "MARKET",
+            "expiration": {"timeInForce": "DAY"},
+            "quantity":   str(quantity),
+        }
+        logger.info("Placing crypto SELL: %s qty=%s", symbol.upper(), quantity)
+        resp = requests.post(url, headers=self._headers(), json=body, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        logger.info("Crypto sell submitted: %s", result)
         return result
